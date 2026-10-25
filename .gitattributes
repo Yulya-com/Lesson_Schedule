@@ -1,0 +1,14 @@
+# Единые переводы строк в репозитории
+* text=auto eol=lf
+
+# Явно текстовые файлы проекта
+*.js   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+
+# Windows-скрипты, если появятся
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf

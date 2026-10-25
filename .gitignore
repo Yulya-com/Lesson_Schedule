@@ -1,0 +1,23 @@
+# Служебные файлы ОС и редакторов
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Настройки редакторов
+.vscode/
+.idea/
+*.swp
+
+# Логи и временные файлы
+*.log
+npm-debug.log*
+*.tmp
+.cache/
+
+# Зависимости и сборка — в проекте их нет, но на всякий случай
+node_modules/
+dist/
+build/
+
+# Резервные копии данных приложения
+tutorflow-*.json
