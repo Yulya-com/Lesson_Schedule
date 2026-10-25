@@ -6,6 +6,8 @@
 
 Работает без сервера и интернета. Данные хранятся в браузере в IndexedDB.
 
+Репозиторий: <https://github.com/Yulya-com/Lesson_Schedule>
+
 ## Быстрый старт
 
 ```powershell
