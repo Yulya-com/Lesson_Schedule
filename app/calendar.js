@@ -120,6 +120,8 @@ export function renderWeek({
       ghost.remove();
       ghost = null;
     }
+    cols.querySelectorAll(".week__col.is-drop-target")
+      .forEach((node) => node.classList.remove("is-drop-target"));
   }
 
   function showGhost(target, duration) {
@@ -127,20 +129,49 @@ export function renderWeek({
     if (!target) return;
     const column = cols.querySelector(`.week__col[data-date="${target.date}"]`);
     if (!column) return;
+
+    column.classList.add("is-drop-target");
+
     ghost = el("div", {
       class: "week__ghost",
       style: `top:${(target.minutes - startMin) * PX_PER_MIN}px;height:${duration * PX_PER_MIN}px`,
-    });
+    }, [
+      el("span", { class: "week__ghost-time", text: `${target.time} · ${WEEKDAYS[weekdayIndex(target.date) - 1].short}` }),
+    ]);
     column.append(ghost);
   }
 
+  /**
+   * Определяет день и время по координатам курсора.
+   * Считаем по геометрии колонок, а не через elementFromPoint:
+   * при перетаскивании под курсором оказывается сам блок занятия либо
+   * прокручиваемая область, и hit-testing даёт неверный день.
+   */
   function slotFromPoint(clientX, clientY) {
-    const node = document.elementFromPoint(clientX, clientY);
-    const column = node && node.closest ? node.closest(".week__col") : null;
-    if (!column || !cols.contains(column)) return null;
+    const columnNodes = [...cols.querySelectorAll(".week__col")];
+    if (!columnNodes.length) return null;
+
+    // Колонка, в чьи границы попал курсор. Если курсор вышел за сетку
+    // по горизонтали — берём ближайшую крайнюю колонку.
+    let column = columnNodes[0];
+    let bestDistance = Infinity;
+
+    for (const node of columnNodes) {
+      const rect = node.getBoundingClientRect();
+      if (clientX >= rect.left && clientX <= rect.right) {
+        column = node;
+        bestDistance = 0;
+        break;
+      }
+      const distance = clientX < rect.left ? rect.left - clientX : clientX - rect.right;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        column = node;
+      }
+    }
 
     const rect = column.getBoundingClientRect();
-    const offsetY = Math.min(Math.max(clientY - rect.top, 0), height);
+    const offsetY = Math.min(Math.max(clientY - rect.top, 0), Math.max(height - 1, 0));
     const snapped = Math.round((offsetY / PX_PER_MIN) / step) * step;
     const minutes = Math.max(startMin, Math.min(endMin - 15, startMin + snapped));
 
@@ -345,6 +376,12 @@ function startDrag(event, node, lesson, ctx, touch = false) {
   let holdTimer = null;
   let finished = false;
 
+  // Цель, которую подсветили последней. При отпускании переносим именно туда:
+  // пересчёт координат в момент mouseup может дать другой день из-за
+  // автопрокрутки и сдвига сетки.
+  let lastTarget = null;
+  let lastPointer = { x: startX, y: startY };
+
   const moveEventName = touch ? "pointermove" : "mousemove";
   const upEventName = touch ? "pointerup" : "mouseup";
   const cancelEventName = touch ? "pointercancel" : null;
@@ -358,6 +395,14 @@ function startDrag(event, node, lesson, ctx, touch = false) {
     holdTimer = setTimeout(() => {
       if (!finished) node.classList.add("is-touch-armed");
     }, TOUCH_HOLD_MS);
+  }
+
+  /** Пересчитывает цель по координатам и подсвечивает её. */
+  function updateTarget(x, y) {
+    lastPointer = { x, y };
+    lastTarget = ctx.slotFromPoint(x, y);
+    ctx.showGhost(lastTarget, lesson.duration);
+    return lastTarget;
   }
 
   function onMove(moveEvent) {
@@ -385,13 +430,19 @@ function startDrag(event, node, lesson, ctx, touch = false) {
     }
 
     node.style.transform = `translate(${dx}px, ${dy}px)`;
-    ctx.showGhost(ctx.slotFromPoint(moveEvent.clientX, moveEvent.clientY), lesson.duration);
-    autoScroll(moveEvent.clientX, moveEvent.clientY);
+    updateTarget(moveEvent.clientX, moveEvent.clientY);
+    // При автопрокрутке сетка сдвигается под неподвижным курсором,
+    // поэтому пересчитываем цель по последним координатам.
+    autoScroll(moveEvent.clientX, moveEvent.clientY, () => updateTarget(lastPointer.x, lastPointer.y));
   }
 
   function onUp(upEvent) {
     if (finished) return;
     const wasActive = active;
+
+    // Берём подсвеченную цель; если её нет — считаем по месту отпускания.
+    const target = lastTarget || ctx.slotFromPoint(upEvent.clientX, upEvent.clientY);
+
     cleanup();
 
     if (!wasActive) {
@@ -400,7 +451,6 @@ function startDrag(event, node, lesson, ctx, touch = false) {
     }
 
     ctx.suppress();
-    const target = ctx.slotFromPoint(upEvent.clientX, upEvent.clientY);
     if (!target) return;
     if (target.date === lesson.date && target.time === lesson.startTime) return;
     ctx.handlers.onMove?.(lesson, { date: target.date, time: target.time });
@@ -434,8 +484,9 @@ let scrollDirection = 0;
 /**
  * Когда занятие тащат к краю видимой области, расписание прокручивается —
  * иначе на узком экране до соседнего дня просто не добраться.
+ * После каждого шага прокрутки вызывается onScroll, чтобы пересчитать цель.
  */
-function autoScroll(x, y) {
+function autoScroll(x, y, onScroll = null) {
   const container = document.querySelector(".week-scroll");
   if (!container) return;
 
@@ -456,6 +507,7 @@ function autoScroll(x, y) {
     const node = document.querySelector(".week-scroll");
     if (!node) return stopAutoScroll();
     node.scrollLeft += direction * 12;
+    if (onScroll) onScroll();
   }, 16);
 }
 
@@ -641,9 +693,32 @@ function attachChipDrag(chip, lesson, root, handlers) {
     handlers.onOpen?.(lesson);
   });
 
+  /**
+   * Ячейка дня под курсором. Считаем по геометрии сетки, а не через
+   * elementFromPoint: под курсором может оказаться сам перетаскиваемый чип.
+   */
   function cellAt(x, y) {
-    const node = document.elementFromPoint(x, y);
-    return node?.closest?.(".month__cell") || null;
+    const cells = [...root.querySelectorAll(".month__cell")];
+    if (!cells.length) return null;
+
+    let best = null;
+    let bestDistance = Infinity;
+
+    for (const cell of cells) {
+      const rect = cell.getBoundingClientRect();
+      const inside = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      if (inside) return cell;
+
+      const dx = Math.max(rect.left - x, 0, x - rect.right);
+      const dy = Math.max(rect.top - y, 0, y - rect.bottom);
+      const distance = Math.hypot(dx, dy);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = cell;
+      }
+    }
+
+    return best;
   }
 
   function clearGhost() {

@@ -385,7 +385,23 @@ button, input, select, textarea { font: inherit; color: inherit; }
   border: 2px dashed var(--accent);
   pointer-events: none;
   z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 2px;
+  overflow: hidden;
 }
+
+.week__ghost-time {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--accent-deep);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Колонка, куда встанет занятие при отпускании. */
+.week__col.is-drop-target { background-color: rgba(76, 95, 213, .1); }
 
 /* ---------- Блок занятия ---------- */
 
