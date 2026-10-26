@@ -17,10 +17,15 @@ import { el } from "./ui.js";
 
 /** Пикселей на минуту: час занимает 52 px. */
 const PX_PER_MIN = 52 / 60;
-const DRAG_MIN_WIDTH = 768;
 
-function canDrag() {
-  return window.matchMedia(`(min-width: ${DRAG_MIN_WIDTH}px)`).matches;
+/** Порог движения мыши, после которого начинается перенос. */
+const DRAG_THRESHOLD = 4;
+
+/** Удержание пальца для переноса на сенсорном экране. */
+const TOUCH_HOLD_MS = 260;
+
+function isTouch(event) {
+  return event.pointerType === "touch" || event.pointerType === "pen";
 }
 
 function studentsMap(students) {
@@ -302,14 +307,14 @@ function attachLessonHandlers(node, lesson, ctx) {
   });
 
   node.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || event.pointerType === "touch" || !canDrag()) return;
+    if (event.button !== 0) return;
     if (event.target.closest(".lesson__resize")) return;
     startDrag(event, node, lesson, ctx);
   });
 
   const handle = node.querySelector(".lesson__resize");
   handle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || event.pointerType === "touch" || !canDrag()) return;
+    if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     startResize(event, node, lesson, ctx);
@@ -321,16 +326,39 @@ function startDrag(event, node, lesson, ctx) {
 
   const startX = event.clientX;
   const startY = event.clientY;
+  const touch = isTouch(event);
   let active = false;
+  let holdTimer = null;
+  let cancelled = false;
 
   capturePointer(node, event.pointerId);
   node.classList.add("is-pressed");
 
+  // На сенсорном экране перенос начинается только после удержания,
+  // иначе обычный свайп по расписанию превращался бы в перенос занятия.
+  if (touch) {
+    holdTimer = setTimeout(() => {
+      if (cancelled) return;
+      node.classList.add("is-touch-armed");
+    }, TOUCH_HOLD_MS);
+  }
+
   function onPointerMove(moveEvent) {
+    if (touch) {
+      const armed = node.classList.contains("is-touch-armed");
+      const moved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
+      // До удержания двигаем — значит человек листает расписание, отменяем.
+      if (!armed && moved > 8) {
+        cancel();
+        return;
+      }
+      if (!armed) return;
+    }
+
     const dx = moveEvent.clientX - startX;
     const dy = moveEvent.clientY - startY;
 
-    if (!active && Math.hypot(dx, dy) < 5) return;
+    if (!active && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
     if (!active) {
       active = true;
       node.classList.add("is-dragging");
@@ -339,19 +367,11 @@ function startDrag(event, node, lesson, ctx) {
 
     node.style.transform = `translate(${dx}px, ${dy}px)`;
     ctx.showGhost(ctx.slotFromPoint(moveEvent.clientX, moveEvent.clientY), lesson.duration);
+    autoScroll(moveEvent.clientX, moveEvent.clientY);
   }
 
   function finish(upEvent) {
-    window.removeEventListener("pointermove", onPointerMove);
-    window.removeEventListener("pointerup", finish);
-    window.removeEventListener("pointercancel", cancel);
-    releasePointer(node, event.pointerId);
-
-    node.classList.remove("is-pressed", "is-dragging");
-    node.style.transform = "";
-    ctx.root.classList.remove("is-dragging");
-    ctx.clearGhost();
-
+    cleanup();
     if (!active) {
       ctx.handlers.onOpen?.(lesson);
       return;
@@ -365,19 +385,65 @@ function startDrag(event, node, lesson, ctx) {
   }
 
   function cancel() {
+    cleanup();
+  }
+
+  function cleanup() {
+    cancelled = true;
+    clearTimeout(holdTimer);
     window.removeEventListener("pointermove", onPointerMove);
     window.removeEventListener("pointerup", finish);
     window.removeEventListener("pointercancel", cancel);
     releasePointer(node, event.pointerId);
-    node.classList.remove("is-pressed", "is-dragging");
+    node.classList.remove("is-pressed", "is-dragging", "is-touch-armed");
     node.style.transform = "";
     ctx.root.classList.remove("is-dragging");
     ctx.clearGhost();
+    stopAutoScroll();
   }
 
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("pointerup", finish);
   window.addEventListener("pointercancel", cancel);
+}
+
+/* ---------- Автопрокрутка при переносе ---------- */
+
+let scrollTimer = null;
+let scrollDirection = 0;
+
+/**
+ * Когда занятие тащат к краю видимой области, расписание прокручивается —
+ * иначе на узком экране до соседнего дня просто не добраться.
+ */
+function autoScroll(x, y) {
+  const container = document.querySelector(".week-scroll");
+  if (!container) return;
+
+  const rect = container.getBoundingClientRect();
+  const zone = 60;
+  let direction = 0;
+
+  if (x < rect.left + zone) direction = -1;
+  else if (x > rect.right - zone) direction = 1;
+
+  if (direction === scrollDirection && scrollTimer) return;
+
+  stopAutoScroll();
+  scrollDirection = direction;
+  if (!direction) return;
+
+  scrollTimer = setInterval(() => {
+    const node = document.querySelector(".week-scroll");
+    if (!node) return stopAutoScroll();
+    node.scrollLeft += direction * 12;
+  }, 16);
+}
+
+function stopAutoScroll() {
+  if (scrollTimer) clearInterval(scrollTimer);
+  scrollTimer = null;
+  scrollDirection = 0;
 }
 
 function startResize(event, node, lesson, ctx) {

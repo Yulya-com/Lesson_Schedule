@@ -407,9 +407,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
   overflow: hidden;
   cursor: grab;
   touch-action: manipulation;
+  user-select: none;
+  -webkit-user-drag: none;
   transition: box-shadow .15s ease, transform .08s ease;
   will-change: transform;
 }
+
+/* Палец удержали — жест стал переносом, прокрутка больше не нужна. */
+.lesson.is-touch-armed { touch-action: none; }
 
 .lesson:hover { box-shadow: 0 4px 14px rgba(29, 35, 51, .16); z-index: 5; }
 .lesson:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -932,6 +937,24 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
   color: var(--accent-deep);
 }
 .series-note__meta { color: var(--ink-soft); font-size: 12px; }
+
+/* Блок переноса в карточке занятия */
+.move-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--surface-soft);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+}
+.move-box__head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.move-box__head strong { font-size: 14px; }
+.move-box__hint { font-size: 12.5px; color: var(--ink-faint); }
+.move-box__quick { display: flex; gap: 6px; flex-wrap: wrap; }
+.move-box__quick .chip { padding: 5px 11px; font-size: 12px; }
+.move-box__actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.move-box__note { font-size: 12px; color: var(--ink-faint); }
 
 /* ---------- Пустое состояние ---------- */
 
