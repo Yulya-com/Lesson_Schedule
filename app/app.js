@@ -1911,13 +1911,25 @@ function renderSettingsView() {
   const demoButton = el("button", { class: "btn btn--ghost", type: "button", text: "Загрузить пример" });
   demoButton.addEventListener("click", loadDemo);
 
+  const demoCount = state.students.filter((item) => item.demo).length;
+  const removeDemoButton = el("button", {
+    class: "btn btn--ghost",
+    type: "button",
+    text: demoCount ? `Удалить демо-данные (${demoCount})` : "Удалить демо-данные",
+  });
+  removeDemoButton.addEventListener("click", removeDemo);
+
   const clearButton = el("button", { class: "btn btn--ghost btn--danger-text", type: "button", text: "Очистить всё" });
   clearButton.addEventListener("click", clearEverything);
 
   page.append(el("section", { class: "card" }, [
     el("h2", { class: "card__title", text: "Данные" }),
     el("p", { class: "card__sub", text: "Всё хранится локально в этом браузере" }),
-    el("div", { class: "card__actions" }, [exportButton, importButton, importInput, demoButton, clearButton]),
+    el("div", { class: "card__actions" }, [exportButton, importButton, importInput, demoButton, removeDemoButton, clearButton]),
+    el("p", {
+      class: "card__text",
+      text: "«Удалить демо-данные» убирает только записи из примера. Ваши ученики, занятия и заметки остаются.",
+    }),
     el("dl", { class: "facts" }, [
       el("div", {}, [el("dt", { text: "Учеников" }), el("dd", { text: String(state.students.length) })]),
       el("div", {}, [el("dt", { text: "Занятий" }), el("dd", { text: String(state.lessons.length) })]),
@@ -1995,10 +2007,19 @@ async function importBackup(event) {
 }
 
 async function loadDemo() {
+  const realStudents = state.students.filter((item) => !item.demo).length;
+  const realLessons = state.lessons.filter((item) => !item.demo).length;
+
+  const message = realStudents || realLessons
+    ? `Внимание: в базе уже есть ваши записи — учеников ${realStudents}, занятий ${realLessons}. `
+      + "Загрузка примера удалит их безвозвратно. Сначала сделайте резервную копию. Продолжить?"
+    : "Текущие демонстрационные данные будут заменены свежим примером на пять недель. Все записи вымышленные.";
+
   const ok = await confirmDialog({
     title: "Загрузить демонстрационные данные?",
-    message: "Текущие ученики, занятия и заметки будут заменены примером на пять недель. Все записи вымышленные.",
+    message,
     confirmLabel: "Загрузить",
+    danger: Boolean(realStudents || realLessons),
   });
   if (!ok) return;
 
@@ -2010,6 +2031,45 @@ async function loadDemo() {
   } catch (error) {
     console.error(error);
     toast("Не удалось загрузить пример", { type: "error" });
+  }
+}
+
+/** Удаляет только демонстрационные записи, не трогая настоящие справочники. */
+async function removeDemo() {
+  let found;
+  try {
+    found = await db.findDemoRecords(state.db);
+  } catch (error) {
+    console.error(error);
+    toast("Не удалось проверить демо-данные", { type: "error" });
+    return;
+  }
+
+  const total = found.students.length + found.lessons.length + found.notes.length;
+  if (!total) {
+    toast("Демонстрационных данных нет", { type: "info" });
+    return;
+  }
+
+  const ok = await confirmDialog({
+    title: "Удалить демо-данные?",
+    message: `Будет удалено: учеников ${found.students.length}, занятий ${found.lessons.length}, `
+      + `серий ${found.series.length}, заметок ${found.notes.length}. `
+      + "Ваши собственные записи останутся.",
+    confirmLabel: "Удалить демо",
+  });
+  if (!ok) return;
+
+  try {
+    const result = await db.removeDemoData(state.db);
+    await refresh();
+    toast(
+      `Демо-данные удалены: учеников ${result.students}, занятий ${result.lessons}`,
+      { type: "success" }
+    );
+  } catch (error) {
+    console.error(error);
+    toast("Не удалось удалить демо-данные", { type: "error" });
   }
 }
 

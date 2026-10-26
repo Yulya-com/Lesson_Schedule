@@ -325,6 +325,7 @@ export function createStudent(input = {}) {
     color: SUBJECT_COLORS.includes(input.color) ? input.color : SUBJECT_COLORS[0],
     comment: String(input.comment || "").trim(),
     archived: Boolean(input.archived),
+    demo: Boolean(input.demo),
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -403,6 +404,7 @@ export function createLesson(input = {}) {
     seriesId,
     occurrenceDate,
     detached: Boolean(input.detached),
+    demo: Boolean(input.demo),
     slot: slotKey(date, startTime),
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -499,6 +501,7 @@ export function createSeriesRecord(input = {}) {
     endDate,
     active: input.active !== false,
     exceptions: Array.isArray(input.exceptions) ? [...new Set(input.exceptions)] : [],
+    demo: Boolean(input.demo),
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -599,6 +602,7 @@ export function createNote(input = {}) {
     lessonId,
     studentId: String(input.studentId || ""),
     text: String(input.text || "").trim(),
+    demo: Boolean(input.demo),
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -635,6 +639,7 @@ export async function saveNoteForLesson(db, { lessonId, studentId, text, id = nu
     lessonId,
     studentId,
     text: clean,
+    demo: existing?.demo,
     createdAt: existing?.createdAt,
   });
   store.put(note);
@@ -845,6 +850,100 @@ export async function clearAll(db) {
   await transactionToPromise(transaction);
 }
 
+/* ---------- Удаление демонстрационных данных ---------- */
+
+function demoNameSet() {
+  return new Set(DEMO_STUDENTS.map((item) => `${item.lastName} ${item.firstName}`));
+}
+
+/**
+ * Определяет, какие записи относятся к демонстрационным.
+ * Основной признак — флаг demo. Старые демо-записи (до появления флага)
+ * распознаются по совпадению имени с демо-набором и общей пачке создания:
+ * демо сеялось одной транзакцией, поэтому у всех записей один createdAt.
+ * Это защищает настоящие справочники: одиночная запись с таким именем
+ * без «пачки» демо-данными не считается.
+ */
+export async function findDemoRecords(db) {
+  const [students, lessons, series, notes] = await Promise.all([
+    getAll(db, STORE_STUDENTS),
+    getAll(db, STORE_LESSONS),
+    getAll(db, STORE_SERIES),
+    getAll(db, STORE_NOTES),
+  ]);
+
+  const stamps = new Map();
+  for (const student of students) {
+    if (!student.createdAt) continue;
+    stamps.set(student.createdAt, (stamps.get(student.createdAt) || 0) + 1);
+  }
+
+  const demoStudentIds = new Set();
+  const demoNames = demoNameSet();
+  for (const student of students) {
+    if (student.demo) {
+      demoStudentIds.add(student.id);
+      continue;
+    }
+    const looksDemo = demoNames.has(student.name)
+      && (stamps.get(student.createdAt) || 0) >= 5;
+    if (looksDemo) demoStudentIds.add(student.id);
+  }
+
+  return {
+    students: students.filter((item) => demoStudentIds.has(item.id)),
+    lessons: lessons.filter((item) => item.demo || demoStudentIds.has(item.studentId)),
+    series: series.filter((item) => item.demo || demoStudentIds.has(item.studentId)),
+    notes: notes.filter((item) => item.demo || demoStudentIds.has(item.studentId)),
+    demoStudentIds,
+  };
+}
+
+/**
+ * Удаляет только демонстрационные записи.
+ * Настоящие ученики, занятия, серии и заметки остаются нетронутыми.
+ */
+export async function removeDemoData(db) {
+  const found = await findDemoRecords(db);
+  const { students, lessons, series, notes } = found;
+
+  if (!students.length && !lessons.length && !notes.length) {
+    return { students: 0, lessons: 0, series: 0, notes: 0 };
+  }
+
+  const stores = [STORE_STUDENTS, STORE_LESSONS, STORE_SERIES, STORE_NOTES, STORE_ACTIVITY];
+  const transaction = db.transaction(stores, "readwrite");
+
+  const studentsStore = transaction.objectStore(STORE_STUDENTS);
+  const lessonsStore = transaction.objectStore(STORE_LESSONS);
+  const seriesStore = transaction.objectStore(STORE_SERIES);
+  const notesStore = transaction.objectStore(STORE_NOTES);
+
+  students.forEach((item) => studentsStore.delete(item.id));
+  lessons.forEach((item) => lessonsStore.delete(item.id));
+  series.forEach((item) => seriesStore.delete(item.id));
+  notes.forEach((item) => notesStore.delete(item.id));
+
+  // Убираем и запись журнала о загрузке примера.
+  const activityStore = transaction.objectStore(STORE_ACTIVITY);
+  const cursorRequest = activityStore.openCursor();
+  cursorRequest.onsuccess = () => {
+    const cursor = cursorRequest.result;
+    if (!cursor) return;
+    if (cursor.value?.type === "demo") cursor.delete();
+    cursor.continue();
+  };
+
+  await transactionToPromise(transaction);
+
+  return {
+    students: students.length,
+    lessons: lessons.length,
+    series: series.length,
+    notes: notes.length,
+  };
+}
+
 /* ---------- Демонстрационные данные ---------- */
 
 const DEMO_STUDENTS = [
@@ -930,6 +1029,8 @@ const DEMO_NOTES = [
 /**
  * Заполняет базу демонстрационными данными.
  * Все записи вымышленные, реальные персональные данные не используются.
+ * Каждая запись помечается флагом demo — по нему демо можно удалить,
+ * не задев настоящие справочники.
  */
 export async function seedDemoData(db) {
   await clearAll(db);
@@ -1015,15 +1116,15 @@ export async function seedDemoData(db) {
   );
 
   const studentsStore = transaction.objectStore(STORE_STUDENTS);
-  students.forEach((student) => studentsStore.put(student));
+  students.forEach((student) => studentsStore.put({ ...student, demo: true }));
 
-  transaction.objectStore(STORE_SERIES).put(demoSeries);
+  transaction.objectStore(STORE_SERIES).put({ ...demoSeries, demo: true });
 
   const lessonsStore = transaction.objectStore(STORE_LESSONS);
-  lessons.forEach((lesson) => lessonsStore.put(lesson));
+  lessons.forEach((lesson) => lessonsStore.put({ ...lesson, demo: true }));
 
   const notesStore = transaction.objectStore(STORE_NOTES);
-  notes.forEach((note) => notesStore.put(note));
+  notes.forEach((note) => notesStore.put({ ...note, demo: true }));
 
   const settingsStore = transaction.objectStore(STORE_SETTINGS);
   settingsStore.put({ key: "workHours", value: DEFAULT_SETTINGS.workHours });
