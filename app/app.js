@@ -188,7 +188,7 @@ function currentPeriod() {
       to: days[6],
       days,
       title: formatWeekRange(days[0], days[6]),
-      subtitle: "Все занятия недели — целиком",
+      subtitle: "Все занятия недели — целиком. Перетащите занятие, чтобы перенести",
       lessons: state.lessons.filter((lesson) => days.includes(lesson.date)),
     };
   }
@@ -201,7 +201,9 @@ function currentPeriod() {
     from,
     to,
     title: formatMonthTitle(state.anchor),
-    subtitle: state.mode === "month" ? "Обзор загруженности за месяц" : "Список занятий месяца",
+    subtitle: state.mode === "month"
+      ? "Обзор загруженности. Перетащите занятие на другой день"
+      : "Список занятий месяца",
     lessons,
   };
 }
@@ -312,6 +314,10 @@ function renderScheduleView() {
   }
 
   if (state.mode === "month") {
+    page.append(el("p", {
+      class: "hint",
+      text: "Перетащите занятие на другой день. Время начала сохранится — изменить его можно в карточке занятия.",
+    }));
     page.append(renderMonth({
       anchor: state.anchor,
       firstDay: state.settings.view.firstDay || 1,
@@ -320,6 +326,7 @@ function renderScheduleView() {
       handlers: {
         onOpen: (lesson) => openLessonModal({ lesson }),
         onCreate: ({ date, time }) => openLessonModal({ date, time }),
+        onMove: moveLesson,
         onDayClick: (date) => {
           state.mode = "week";
           state.anchor = date;

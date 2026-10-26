@@ -51,9 +51,14 @@ const server = http.createServer(async (request, response) => {
 
   try {
     const body = await readFile(filePath);
+    const type = MIME[extname(filePath).toLowerCase()] || "application/octet-stream";
     response.writeHead(200, {
-      "Content-Type": MIME[extname(filePath).toLowerCase()] || "application/octet-stream",
-      "Cache-Control": "no-cache",
+      "Content-Type": type,
+      // Файлы приложения меняются во время разработки: браузер не должен
+      // отдавать старую версию из кэша.
+      "Cache-Control": "no-store, must-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
     });
     response.end(body);
   } catch {

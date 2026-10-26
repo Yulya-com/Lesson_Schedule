@@ -306,50 +306,69 @@ function attachLessonHandlers(node, lesson, ctx) {
     ctx.handlers.onMove?.(lesson, shift);
   });
 
-  node.addEventListener("pointerdown", (event) => {
+  // Мышь обрабатываем классическими событиями: они работают в любом браузере
+  // и не зависят от Pointer Events. Сенсорный ввод — через pointer-события.
+  node.addEventListener("mousedown", (event) => {
     if (event.button !== 0) return;
     if (event.target.closest(".lesson__resize")) return;
-    startDrag(event, node, lesson, ctx);
+    startDrag(event, node, lesson, ctx, false);
+  });
+
+  node.addEventListener("pointerdown", (event) => {
+    if (!isTouch(event)) return;
+    if (event.target.closest(".lesson__resize")) return;
+    startDrag(event, node, lesson, ctx, true);
   });
 
   const handle = node.querySelector(".lesson__resize");
-  handle.addEventListener("pointerdown", (event) => {
+  handle.addEventListener("mousedown", (event) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    startResize(event, node, lesson, ctx);
+    startResize(event, node, lesson, ctx, false);
+  });
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (!isTouch(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    startResize(event, node, lesson, ctx, true);
   });
 }
 
-function startDrag(event, node, lesson, ctx) {
-  event.preventDefault();
+function startDrag(event, node, lesson, ctx, touch = false) {
+  if (!touch) event.preventDefault();
 
   const startX = event.clientX;
   const startY = event.clientY;
-  const touch = isTouch(event);
   let active = false;
   let holdTimer = null;
-  let cancelled = false;
+  let finished = false;
 
-  capturePointer(node, event.pointerId);
+  const moveEventName = touch ? "pointermove" : "mousemove";
+  const upEventName = touch ? "pointerup" : "mouseup";
+  const cancelEventName = touch ? "pointercancel" : null;
+
+  if (touch) capturePointer(node, event.pointerId);
   node.classList.add("is-pressed");
 
   // На сенсорном экране перенос начинается только после удержания,
   // иначе обычный свайп по расписанию превращался бы в перенос занятия.
   if (touch) {
     holdTimer = setTimeout(() => {
-      if (cancelled) return;
-      node.classList.add("is-touch-armed");
+      if (!finished) node.classList.add("is-touch-armed");
     }, TOUCH_HOLD_MS);
   }
 
-  function onPointerMove(moveEvent) {
+  function onMove(moveEvent) {
+    if (finished) return;
+
     if (touch) {
       const armed = node.classList.contains("is-touch-armed");
       const moved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
       // До удержания двигаем — значит человек листает расписание, отменяем.
       if (!armed && moved > 8) {
-        cancel();
+        cleanup();
         return;
       }
       if (!armed) return;
@@ -370,9 +389,12 @@ function startDrag(event, node, lesson, ctx) {
     autoScroll(moveEvent.clientX, moveEvent.clientY);
   }
 
-  function finish(upEvent) {
+  function onUp(upEvent) {
+    if (finished) return;
+    const wasActive = active;
     cleanup();
-    if (!active) {
+
+    if (!wasActive) {
       ctx.handlers.onOpen?.(lesson);
       return;
     }
@@ -384,17 +406,14 @@ function startDrag(event, node, lesson, ctx) {
     ctx.handlers.onMove?.(lesson, { date: target.date, time: target.time });
   }
 
-  function cancel() {
-    cleanup();
-  }
-
   function cleanup() {
-    cancelled = true;
+    if (finished) return;
+    finished = true;
     clearTimeout(holdTimer);
-    window.removeEventListener("pointermove", onPointerMove);
-    window.removeEventListener("pointerup", finish);
-    window.removeEventListener("pointercancel", cancel);
-    releasePointer(node, event.pointerId);
+    document.removeEventListener(moveEventName, onMove);
+    document.removeEventListener(upEventName, onUp);
+    if (cancelEventName) document.removeEventListener(cancelEventName, cleanup);
+    if (touch) releasePointer(node, event.pointerId);
     node.classList.remove("is-pressed", "is-dragging", "is-touch-armed");
     node.style.transform = "";
     ctx.root.classList.remove("is-dragging");
@@ -402,9 +421,9 @@ function startDrag(event, node, lesson, ctx) {
     stopAutoScroll();
   }
 
-  window.addEventListener("pointermove", onPointerMove);
-  window.addEventListener("pointerup", finish);
-  window.addEventListener("pointercancel", cancel);
+  document.addEventListener(moveEventName, onMove);
+  document.addEventListener(upEventName, onUp);
+  if (cancelEventName) document.addEventListener(cancelEventName, cleanup);
 }
 
 /* ---------- Автопрокрутка при переносе ---------- */
@@ -446,27 +465,38 @@ function stopAutoScroll() {
   scrollDirection = 0;
 }
 
-function startResize(event, node, lesson, ctx) {
+function startResize(event, node, lesson, ctx, touch = false) {
   const startY = event.clientY;
   const startHeight = lesson.duration * PX_PER_MIN;
   let duration = lesson.duration;
+  let finished = false;
 
-  capturePointer(node, event.pointerId);
+  const moveEventName = touch ? "pointermove" : "mousemove";
+  const upEventName = touch ? "pointerup" : "mouseup";
+  const cancelEventName = touch ? "pointercancel" : null;
+
+  if (touch) capturePointer(node, event.pointerId);
   node.classList.add("is-resizing");
 
-  function onPointerMove(moveEvent) {
+  function onMove(moveEvent) {
     const delta = moveEvent.clientY - startY;
     const rawMinutes = lesson.duration + (delta / PX_PER_MIN);
     duration = Math.max(15, Math.min(240, Math.round(rawMinutes / 15) * 15));
     node.style.height = `${duration * PX_PER_MIN}px`;
   }
 
-  function finish() {
-    window.removeEventListener("pointermove", onPointerMove);
-    window.removeEventListener("pointerup", finish);
-    window.removeEventListener("pointercancel", finish);
-    releasePointer(node, event.pointerId);
+  function cleanup() {
+    if (finished) return;
+    finished = true;
+    document.removeEventListener(moveEventName, onMove);
+    document.removeEventListener(upEventName, onUp);
+    if (cancelEventName) document.removeEventListener(cancelEventName, cleanup);
+    if (touch) releasePointer(node, event.pointerId);
     node.classList.remove("is-resizing");
+  }
+
+  function onUp() {
+    cleanup();
 
     if (duration === lesson.duration) {
       node.style.height = `${startHeight}px`;
@@ -481,9 +511,9 @@ function startResize(event, node, lesson, ctx) {
     });
   }
 
-  window.addEventListener("pointermove", onPointerMove);
-  window.addEventListener("pointerup", finish);
-  window.addEventListener("pointercancel", finish);
+  document.addEventListener(moveEventName, onMove);
+  document.addEventListener(upEventName, onUp);
+  if (cancelEventName) document.addEventListener(cancelEventName, cleanup);
 }
 
 // Захват указателя нужен, чтобы блок не терял события при выходе за свои границы.
@@ -560,12 +590,13 @@ export function renderMonth({
       const chip = el("button", {
         class: `month__chip ${subjectClass(student)}${lesson.status === "cancelled" ? " is-cancelled" : ""}`,
         type: "button",
-        title: `${student?.name || "Ученик не найден"} · ${lesson.startTime}`,
+        title: `${student?.name || "Ученик не найден"} · ${lesson.startTime} — перетащите на другой день`,
       }, [
         el("span", { class: "month__chip-time", text: lesson.startTime }),
         el("span", { class: "month__chip-name", text: student?.name || "Без ученика" }),
       ]);
-      chip.addEventListener("click", () => handlers.onOpen?.(lesson));
+      chip.dataset.id = lesson.id;
+      attachChipDrag(chip, lesson, root, handlers);
       chips.append(chip);
     }
 
@@ -587,4 +618,115 @@ export function renderMonth({
 
   root.append(head, body);
   return root;
+}
+
+/**
+ * Перетаскивание занятия в месячном виде: чип перетаскивается на ячейку
+ * другого дня, время начала сохраняется.
+ */
+function attachChipDrag(chip, lesson, root, handlers) {
+  let startX = 0;
+  let startY = 0;
+  let active = false;
+  let finished = false;
+  let ghost = null;
+  let suppressClick = false;
+
+  chip.addEventListener("click", (event) => {
+    if (suppressClick) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    handlers.onOpen?.(lesson);
+  });
+
+  function cellAt(x, y) {
+    const node = document.elementFromPoint(x, y);
+    return node?.closest?.(".month__cell") || null;
+  }
+
+  function clearGhost() {
+    if (ghost) {
+      ghost.remove();
+      ghost = null;
+    }
+  }
+
+  function onMove(moveEvent) {
+    if (finished) return;
+    const dx = moveEvent.clientX - startX;
+    const dy = moveEvent.clientY - startY;
+
+    if (!active && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+    if (!active) {
+      active = true;
+      chip.classList.add("is-dragging");
+      root.classList.add("is-dragging");
+    }
+
+    chip.style.transform = `translate(${dx}px, ${dy}px)`;
+    chip.style.zIndex = "20";
+
+    clearGhost();
+    const cell = cellAt(moveEvent.clientX, moveEvent.clientY);
+    if (cell) {
+      cell.classList.add("is-drop-target");
+      ghost = cell;
+    }
+
+    // У нижнего и верхнего края окна страница прокручивается,
+    // иначе до дальнего дня месяца не добраться.
+    const edge = 70;
+    if (moveEvent.clientY < edge) window.scrollBy(0, -14);
+    else if (moveEvent.clientY > window.innerHeight - edge) window.scrollBy(0, 14);
+  }
+
+  function onUp(upEvent) {
+    if (finished) return;
+    const wasActive = active;
+    cleanup();
+
+    if (!wasActive) return;
+
+    // Клик, который браузер пришлёт после перетаскивания, не должен открывать карточку.
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 320);
+
+    const cell = cellAt(upEvent.clientX, upEvent.clientY);
+    if (!cell) return;
+    const nextDate = cell.dataset.date;
+    if (!nextDate || nextDate === lesson.date) return;
+    handlers.onMove?.(lesson, { date: nextDate, time: lesson.startTime });
+  }
+
+  function cleanup() {
+    if (finished) return;
+    finished = true;
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    chip.classList.remove("is-dragging");
+    chip.style.transform = "";
+    chip.style.zIndex = "";
+    root.classList.remove("is-dragging");
+    if (ghost) ghost.classList.remove("is-drop-target");
+    ghost = null;
+  }
+
+  chip.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    startX = event.clientX;
+    startY = event.clientY;
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+  chip.addEventListener("pointerdown", (event) => {
+    if (!isTouch(event)) return;
+    startX = event.clientX;
+    startY = event.clientY;
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  });
 }
