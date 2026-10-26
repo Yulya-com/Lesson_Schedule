@@ -1290,7 +1290,7 @@ function renderStudentsView() {
   const search = input({
     type: "search",
     id: "student-search",
-    placeholder: "Имя, предмет или контакт",
+    placeholder: "Фамилия, имя или предмет",
     value: state.studentQuery,
     "aria-label": "Поиск учеников",
   });
@@ -1307,7 +1307,7 @@ function renderStudentsView() {
   page.append(el("header", { class: "page__head" }, [
     el("div", { class: "page__heading" }, [
       el("h1", { class: "page__title", text: "Ученики" }),
-      el("p", { class: "page__sub", text: "Имя, предмет, контакт и ставка за 60 минут" }),
+      el("p", { class: "page__sub", text: "Фамилия и имя, предмет, контакт и ставка за 60 минут" }),
     ]),
     el("div", { class: "page__tools" }, [
       el("button", {
@@ -1336,7 +1336,7 @@ function renderStudentsView() {
         title: state.students.length ? "Никого не найдено" : "Пока нет учеников",
         text: state.students.length
           ? "Измените запрос или включите показ архива."
-          : "Добавьте первого ученика — имя, предмет и ставка понадобятся для расписания.",
+          : "Добавьте первого ученика — имя, фамилия, предмет и ставка понадобятся для расписания.",
         actions: state.students.length ? [] : [
           el("button", {
             class: "btn btn--primary", type: "button", text: "Добавить ученика",
@@ -1409,11 +1409,25 @@ function openStudentModal(student = null) {
   const formId = `student-form-${Math.random().toString(36).slice(2, 8)}`;
 
   const initial = isNew
-    ? { name: "", subject: "", contact: "", rate: state.settings.defaults.rate, color: db.SUBJECT_COLORS[0], comment: "" }
+    ? { firstName: "", lastName: "", subject: "", contact: "", rate: state.settings.defaults.rate, color: db.SUBJECT_COLORS[0], comment: "" }
     : { ...student };
 
-  const nameInput = input({ type: "text", name: "name", value: initial.name, required: true, placeholder: "Имя и фамилия" });
-  const nameField = field({ label: "Имя", control: nameInput, required: true });
+  const firstNameInput = input({
+    type: "text", name: "firstName", value: initial.firstName || "",
+    required: true, placeholder: "Анна", autocomplete: "off",
+  });
+  const firstNameField = field({ label: "Имя", control: firstNameInput, required: true });
+
+  const lastNameInput = input({
+    type: "text", name: "lastName", value: initial.lastName || "",
+    required: true, placeholder: "Ковалёва", autocomplete: "off",
+  });
+  const lastNameField = field({
+    label: "Фамилия",
+    control: lastNameInput,
+    required: true,
+    hint: "В расписании видно и фамилию, и имя",
+  });
 
   const subjectListId = `student-subjects-${formId}`;
   const subjectInput = input({ type: "text", name: "subject", value: initial.subject, list: subjectListId, placeholder: "Например, Математика", required: true });
@@ -1461,7 +1475,8 @@ function openStudentModal(student = null) {
   const commentField = field({ label: "Комментарий", control: commentInput });
 
   const form = el("form", { class: "form", id: formId, novalidate: true }, [
-    nameField, subjectField, subjectDatalist,
+    el("div", { class: "form__row" }, [lastNameField, firstNameField]),
+    subjectField, subjectDatalist,
     el("div", { class: "form__row" }, [contactField, rateField]),
     colorField, commentField,
   ]);
@@ -1529,7 +1544,7 @@ function openStudentModal(student = null) {
 
   const modal = openModal({
     title: isNew ? "Новый ученик" : student.name,
-    subtitle: isNew ? "Имя, предмет и ставка обязательны" : student.subject,
+    subtitle: isNew ? "Имя, фамилия, предмет и ставка обязательны" : student.subject,
     size: "md",
     body,
     footer,
@@ -1537,12 +1552,14 @@ function openStudentModal(student = null) {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    [nameField, subjectField, contactField, rateField].forEach((node) => node.setError(""));
+    [firstNameField, lastNameField, subjectField, contactField, rateField]
+      .forEach((node) => node.setError(""));
 
     try {
       const saved = await db.saveStudent(state.db, {
         ...(isNew ? {} : initial),
-        name: nameInput.value,
+        firstName: firstNameInput.value,
+        lastName: lastNameInput.value,
         subject: subjectInput.value,
         contact: contactInput.value,
         rate: rateInput.value,
@@ -1560,8 +1577,14 @@ function openStudentModal(student = null) {
       toast(isNew ? "Ученик добавлен" : "Данные ученика сохранены", { type: "success" });
     } catch (error) {
       if (error instanceof db.ValidationError) {
-        const map = { name: nameField, subject: subjectField, contact: contactField, rate: rateField };
-        const target = map[error.field] || nameField;
+        const map = {
+          firstName: firstNameField,
+          lastName: lastNameField,
+          subject: subjectField,
+          contact: contactField,
+          rate: rateField,
+        };
+        const target = map[error.field] || firstNameField;
         target.setError(error.message);
         target.querySelector("input")?.focus();
         return;

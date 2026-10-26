@@ -414,26 +414,91 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .lesson:hover { box-shadow: 0 4px 14px rgba(29, 35, 51, .16); z-index: 5; }
 .lesson:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.lesson__time { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; opacity: .85; }
-.lesson__title { font-size: 12.5px; font-weight: 600; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lesson__sub { font-size: 11px; opacity: .78; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lesson__head {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.lesson__time {
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  opacity: .82;
+  white-space: nowrap;
+  flex: none;
+}
+
+.lesson__last {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.lesson__first {
+  font-size: 11.5px;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: .92;
+}
+
+.lesson__sub {
+  font-size: 10.5px;
+  line-height: 1.15;
+  opacity: .7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .lesson__paid {
-  position: absolute;
-  top: 4px; right: 5px;
+  margin-left: auto;
   font-size: 10px;
   font-weight: 700;
-  opacity: .8;
+  opacity: .7;
+  flex: none;
 }
 
 .lesson__flag {
-  position: absolute;
-  bottom: 3px; right: 5px;
   font-size: 9.5px;
   text-transform: uppercase;
   letter-spacing: .04em;
-  opacity: .6;
+  opacity: .55;
+  line-height: 1.1;
 }
+
+/* Совсем короткое занятие: одна строка «Фамилия И.». */
+.lesson--tiny { padding: 1px 5px; gap: 0; }
+.lesson__tiny {
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lesson--tiny .lesson__paid {
+  position: absolute;
+  top: 0; right: 2px;
+  margin: 0;
+  font-size: 8px;
+}
+
+/* Очень короткое занятие: время убираем, но фамилию и имя оставляем. */
+.lesson--xs { padding: 2px 6px; gap: 0; }
+.lesson--xs .lesson__head { gap: 0; }
+.lesson--xs .lesson__time { display: none; }
+.lesson--xs .lesson__last { font-size: 11.5px; }
+.lesson--xs .lesson__first { font-size: 11px; }
+.lesson--xs .lesson__paid { position: absolute; top: 1px; right: 3px; margin: 0; }
 
 .lesson__resize {
   position: absolute;
@@ -455,7 +520,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .lesson:hover .lesson__resize::after { opacity: .35; }
 
 .lesson--done { box-shadow: inset 0 0 0 1px var(--subj-strong, var(--accent)); }
-.lesson--done .lesson__time::before { content: "✓ "; }
+.lesson--done .lesson__last::before { content: "✓ "; }
 
 .lesson--cancelled {
   opacity: .55;

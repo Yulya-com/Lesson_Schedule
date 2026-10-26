@@ -200,6 +200,11 @@ function buildLesson(lesson, student, ctx) {
   const start = timeToMinutes(lesson.startTime);
   const end = start + lesson.duration;
   const top = (start - ctx.startMin) * PX_PER_MIN;
+  const height = lesson.duration * PX_PER_MIN;
+
+  const fullName = student ? student.name : "Ученик не найден";
+  const lastName = student?.lastName || (student ? "" : "Ученик не найден");
+  const firstName = student?.firstName || (student ? "" : "");
 
   const node = el("button", {
     class: [
@@ -207,39 +212,75 @@ function buildLesson(lesson, student, ctx) {
       `lesson--${lesson.status}`,
       subjectClass(student),
       lesson.detached ? "lesson--detached" : "",
+      height < 34 ? "lesson--xs" : "",
     ].filter(Boolean).join(" "),
     type: "button",
     dataset: { id: lesson.id },
-    style: `top:${top}px;height:${lesson.duration * PX_PER_MIN}px`,
+    style: `top:${top}px;height:${height}px`,
     title: [
-      student ? student.name : "Ученик не найден",
+      fullName,
       timeRangeLabel(lesson.startTime, lesson.duration),
       lesson.subject || student?.subject || "",
       lesson.paid ? "оплачено" : "не оплачено",
+      lesson.detached ? "разово" : "",
     ].filter(Boolean).join(" · "),
   });
 
-  const compact = lesson.duration * PX_PER_MIN < 46;
+  // Совсем низкий блок (15 минут) не вмещает две строки:
+  // тогда показываем «Фамилия И.» одной строкой.
+  const tiny = height < 24;
 
-  node.append(
+  if (tiny) {
+    node.classList.add("lesson--tiny");
+    const short = lastName && firstName ? `${lastName} ${firstName.charAt(0)}.` : (lastName || firstName);
+    node.append(el("span", { class: "lesson__tiny", text: short }));
+    if (lesson.paid) {
+      node.append(el("span", { class: "lesson__paid", text: "₽", title: "Оплачено", "aria-label": "Оплачено" }));
+    }
+    node.append(el("span", { class: "lesson__resize", "aria-hidden": "true" }));
+    attachLessonHandlers(node, lesson, ctx);
+    return node;
+  }
+
+  // Первая строка: время и фамилия. Вторая: имя. Так в блоке видны оба поля,
+  // а время всё равно читается по сетке.
+  const head = el("span", { class: "lesson__head" }, [
     el("span", { class: "lesson__time", text: `${lesson.startTime}–${minutesToTime(end)}` }),
-    el("span", { class: "lesson__title", text: student ? student.name : "Ученик не найден" })
-  );
+    el("span", { class: "lesson__last", text: lastName }),
+  ]);
 
-  if (!compact) {
+  if (lesson.paid) {
+    head.append(el("span", {
+      class: "lesson__paid",
+      text: "₽",
+      title: "Оплачено",
+      "aria-label": "Оплачено",
+    }));
+  }
+
+  node.append(head);
+
+  if (firstName) node.append(el("span", { class: "lesson__first", text: firstName }));
+
+  // Предмет — только если блок достаточно высокий, чтобы не теснить имя.
+  if (height >= 48) {
     const sub = lesson.subject || student?.subject || "";
     if (sub) node.append(el("span", { class: "lesson__sub", text: sub }));
   }
 
-  if (lesson.paid) {
-    node.append(el("span", { class: "lesson__paid", text: "₽", title: "Оплачено" }));
-  }
-
-  if (lesson.detached) {
-    node.append(el("span", { class: "lesson__flag", text: "разово", title: "Занятие вынуто из серии" }));
+  if (lesson.detached && height >= 48) {
+    node.append(el("span", { class: "lesson__flag", text: "разово" }));
   }
 
   node.append(el("span", { class: "lesson__resize", "aria-hidden": "true" }));
+
+  attachLessonHandlers(node, lesson, ctx);
+  return node;
+}
+
+/** Навешивает открытие, сдвиг с клавиатуры, перетаскивание и растягивание. */
+function attachLessonHandlers(node, lesson, ctx) {
+  const start = timeToMinutes(lesson.startTime);
 
   // Клавиатура: Enter/Space дают click с detail === 0.
   node.addEventListener("click", (event) => {
@@ -273,8 +314,6 @@ function buildLesson(lesson, student, ctx) {
     event.stopPropagation();
     startResize(event, node, lesson, ctx);
   });
-
-  return node;
 }
 
 function startDrag(event, node, lesson, ctx) {

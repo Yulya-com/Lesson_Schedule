@@ -10,7 +10,7 @@ import {
 } from "./recurrence.js";
 
 export const DB_NAME = "tutorflow-db";
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 export const STORE_STUDENTS = "students";
 export const STORE_LESSONS = "lessons";
@@ -92,7 +92,7 @@ export function openDatabase() {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
     request.onupgradeneeded = (event) => {
-      migrate(request.result, event.oldVersion);
+      migrate(request.result, event.oldVersion, request.transaction);
     };
 
     request.onsuccess = () => {
@@ -146,12 +146,36 @@ const migrations = {
     const activity = db.createObjectStore(STORE_ACTIVITY, { keyPath: "id" });
     activity.createIndex("at", "at", { unique: false });
   },
+
+  // Версия 2: имя и фамилия стали отдельными полями.
+  // Существующие записи разбираем из старого поля name прямо в миграции.
+  1: (db, transaction) => {
+    const store = transaction.objectStore(STORE_STUDENTS);
+    const cursorRequest = store.openCursor();
+
+    cursorRequest.onsuccess = () => {
+      const cursor = cursorRequest.result;
+      if (!cursor) return;
+
+      const student = cursor.value;
+      if (!student.firstName) {
+        const { firstName, lastName } = parseFullName(student.name);
+        cursor.update({
+          ...student,
+          firstName,
+          lastName,
+          name: fullName({ firstName, lastName }),
+        });
+      }
+      cursor.continue();
+    };
+  },
 };
 
-function migrate(db, oldVersion) {
+function migrate(db, oldVersion, transaction) {
   for (let version = oldVersion; version < DB_VERSION; version += 1) {
     const step = migrations[version];
-    if (step) step(db);
+    if (step) step(db, transaction);
   }
 }
 
@@ -229,10 +253,48 @@ export async function saveSettings(db, patch = {}) {
 
 /* ---------- Ученики ---------- */
 
+/**
+ * Разбирает строку «Фамилия Имя» на части, если раздельных полей нет.
+ * Нужно для старых записей и старых файлов резервной копии.
+ */
+export function parseFullName(value) {
+  const parts = String(value || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return { firstName: "", lastName: "" };
+  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+
+/** Отображаемое имя: сначала фамилия, затем имя. */
+export function fullName(student) {
+  const last = String(student?.lastName || "").trim();
+  const first = String(student?.firstName || "").trim();
+  if (last && first) return `${last} ${first}`;
+  return first || last || "Ученик не найден";
+}
+
 export function createStudent(input = {}) {
-  const name = String(input.name || "").trim();
-  if (name.length < 2) throw new ValidationError("Имя ученика — не короче 2 символов.", "name");
-  if (name.length > 60) throw new ValidationError("Имя ученика — не длиннее 60 символов.", "name");
+  const hasParts = input.firstName !== undefined || input.lastName !== undefined;
+  const parsed = hasParts
+    ? {
+        firstName: String(input.firstName || "").trim(),
+        lastName: String(input.lastName || "").trim(),
+      }
+    : parseFullName(input.name);
+
+  const { firstName, lastName } = parsed;
+
+  if (firstName.length < 2) {
+    throw new ValidationError("Имя — не короче 2 символов.", "firstName");
+  }
+  if (firstName.length > 40) {
+    throw new ValidationError("Имя — не длиннее 40 символов.", "firstName");
+  }
+  if (lastName.length < 2) {
+    throw new ValidationError("Фамилия — не короче 2 символов.", "lastName");
+  }
+  if (lastName.length > 40) {
+    throw new ValidationError("Фамилия — не длиннее 40 символов.", "lastName");
+  }
 
   const subject = String(input.subject || "").trim();
   if (!subject) throw new ValidationError("Укажите предмет занятий.", "subject");
@@ -253,7 +315,10 @@ export function createStudent(input = {}) {
 
   return {
     id: input.id || createId(),
-    name,
+    firstName,
+    lastName,
+    // Производное поле: по нему сортируем, ищем и показываем в расписании.
+    name: fullName({ firstName, lastName }),
     subject,
     contact,
     rate: Math.round(rate),
@@ -784,7 +849,8 @@ export async function clearAll(db) {
 
 const DEMO_STUDENTS = [
   {
-    name: "Анна Ковалёва",
+    firstName: "Анна",
+    lastName: "Ковалёва",
     subject: "Математика",
     contact: "+7 916 240-18-32",
     rate: 2200,
@@ -792,7 +858,8 @@ const DEMO_STUDENTS = [
     comment: "Подготовка к ЕГЭ, профильный уровень. Сильная, но торопится в вычислениях.",
   },
   {
-    name: "Марк Лебедев",
+    firstName: "Марк",
+    lastName: "Лебедев",
     subject: "Физика",
     contact: "@mark_lebedev",
     rate: 2000,
@@ -800,7 +867,8 @@ const DEMO_STUDENTS = [
     comment: "10 класс, олимпиадные задачи. Любит разбираться в сути, не любит формулы без объяснения.",
   },
   {
-    name: "Софья Ильина",
+    firstName: "Софья",
+    lastName: "Ильина",
     subject: "Английский язык",
     contact: "sofia.ilina@mail.ru",
     rate: 1800,
@@ -808,7 +876,8 @@ const DEMO_STUDENTS = [
     comment: "Готовится к IELTS, упор на speaking.",
   },
   {
-    name: "Тимур Сафин",
+    firstName: "Тимур",
+    lastName: "Сафин",
     subject: "Информатика",
     contact: "+7 903 118-55-07",
     rate: 2400,
@@ -816,7 +885,8 @@ const DEMO_STUDENTS = [
     comment: "ЕГЭ по информатике, программирование на Python. Иногда пропускает по тренировкам.",
   },
   {
-    name: "Елизавета Громова",
+    firstName: "Елизавета",
+    lastName: "Громова",
     subject: "Русский язык",
     contact: "+7 925 771-04-16",
     rate: 1600,
@@ -824,7 +894,8 @@ const DEMO_STUDENTS = [
     comment: "9 класс, сочинение и изложение.",
   },
   {
-    name: "Никита Орлов",
+    firstName: "Никита",
+    lastName: "Орлов",
     subject: "Химия",
     contact: "nikita.orlov@yandex.ru",
     rate: 1900,
