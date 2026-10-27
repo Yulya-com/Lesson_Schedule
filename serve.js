@@ -10,6 +10,11 @@ const ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const PORT = Number(process.env.PORT) || 5173;
 const HOST = process.env.HOST || "127.0.0.1";
 
+// Сервер отдаёт файлы только из этой папки.
+// Всё остальное — документация, исходники сервера, .git, резервные копии
+// с персональными данными — недоступно по HTTP.
+const PUBLIC_DIR = resolve(join(ROOT, "app"));
+
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -34,10 +39,19 @@ function safePath(urlPath) {
   }
 
   if (clean === "/" || clean === "") return { redirect: "/app/" };
-  if (clean === "/app" || clean === "/app/") return { file: join(ROOT, "app", "index.html") };
+  if (clean === "/app") return { redirect: "/app/" };
+  if (clean === "/app/") return { file: join(PUBLIC_DIR, "index.html") };
 
-  const target = normalize(join(ROOT, clean));
-  if (!target.startsWith(ROOT + sep) && target !== ROOT) return { forbidden: true };
+  // Запросы вне /app/ отсекаются до работы с файловой системой.
+  if (!clean.startsWith("/app/")) return { forbidden: true };
+
+  const relative = clean.slice("/app/".length);
+  const target = normalize(join(PUBLIC_DIR, relative));
+
+  // '\0' и подобные трюки, а также выход через ../ за пределы папки app.
+  if (target.includes("\0")) return { forbidden: true };
+  if (!target.startsWith(PUBLIC_DIR + sep)) return { forbidden: true };
+
   return { file: target };
 }
 
@@ -95,6 +109,7 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`TutorFlow: http://localhost:${PORT}/app/`);
-  console.log(`Корень: ${ROOT}`);
+  console.log("Открыт только каталог app, остальные файлы проекта недоступны по HTTP");
+  console.log(`Слушает: ${HOST}`);
   console.log("Остановить: Ctrl+C");
 });
