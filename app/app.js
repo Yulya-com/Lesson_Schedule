@@ -803,16 +803,63 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
     : null;
 
   /* Перенос занятия.
-     Поля даты и времени здесь те же, что и в блоке «Дата и время»:
-     второй набор полей только запутывал, и «Сохранить» не переносил занятие. */
+     В блоке свои поля «Новая дата» и «Новое время». Они синхронизированы
+     с основными полями формы: что бы пользователь ни менял и какую бы кнопку
+     ни нажимал, перенос срабатывает. */
   let moveSection = null;
 
   if (!isNew) {
-    const quickShift = (days) => {
-      const base = dateInput.value || lesson.date;
-      dateInput.value = addDays(base, days);
+    const moveDateInput = input({
+      type: "date",
+      name: "moveDate",
+      value: lesson.date,
+    });
+    const moveDateField = field({ label: "Новая дата", control: moveDateInput });
+
+    const moveTimeInput = input({
+      type: "time",
+      step: "900",
+      name: "moveTime",
+      value: lesson.startTime,
+    });
+    const moveTimeField = field({ label: "Новое время", control: moveTimeInput });
+
+    const moveHint = el("span", { class: "move-box__note" });
+
+    // Поля переноса и основные поля всегда показывают одно и то же.
+    const syncFromMove = () => {
+      dateInput.value = moveDateInput.value;
+      timeInput.value = moveTimeInput.value;
       dateField.setError("");
-      dateInput.dispatchEvent(new Event("input", { bubbles: true }));
+      timeField.setError("");
+      updateMoveHint();
+    };
+
+    const syncFromMain = () => {
+      moveDateInput.value = dateInput.value;
+      moveTimeInput.value = timeInput.value;
+      updateMoveHint();
+    };
+
+    const updateMoveHint = () => {
+      const changed = moveDateInput.value !== lesson.date
+        || moveTimeInput.value !== lesson.startTime;
+      moveHint.textContent = changed
+        ? `Занятие переедет на ${formatDate(moveDateInput.value)}, ${moveTimeInput.value}`
+        : "Выберите новую дату или время и нажмите «Перенести»";
+    };
+
+    ["input", "change"].forEach((eventName) => {
+      moveDateInput.addEventListener(eventName, syncFromMove);
+      moveTimeInput.addEventListener(eventName, syncFromMove);
+      dateInput.addEventListener(eventName, syncFromMain);
+      timeInput.addEventListener(eventName, syncFromMain);
+    });
+
+    const quickShift = (days) => {
+      const base = moveDateInput.value || lesson.date;
+      moveDateInput.value = addDays(base, days);
+      syncFromMove();
     };
 
     const quickRow = el("div", { class: "move-box__quick" }, [
@@ -824,9 +871,8 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
         type: "button",
         text: "Сегодня",
         onclick: () => {
-          dateInput.value = todayISO();
-          dateField.setError("");
-          dateInput.dispatchEvent(new Event("input", { bubbles: true }));
+          moveDateInput.value = todayISO();
+          syncFromMove();
         },
       }),
     ]);
@@ -837,41 +883,30 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
       text: "Перенести",
     });
 
-    const moveHint = el("span", { class: "move-box__note" });
-
-    const updateMoveHint = () => {
-      const changed = dateInput.value !== lesson.date || timeInput.value !== lesson.startTime;
-      moveHint.textContent = changed
-        ? `Занятие переедет на ${formatDate(dateInput.value)}, ${timeInput.value}`
-        : "Измените дату или время выше — тогда занятие переедет";
-    };
-
-    ["input", "change"].forEach((eventName) => {
-      dateInput.addEventListener(eventName, updateMoveHint);
-      timeInput.addEventListener(eventName, updateMoveHint);
-    });
-
-    // Кнопка «Перенести» делает то же, что «Сохранить»: применяет дату и время
-    // из полей выше. Один путь — одно поведение.
     moveButton.addEventListener("click", () => {
-      dateField.setError("");
-      timeField.setError("");
+      moveDateField.setError("");
+      moveTimeField.setError("");
 
-      if (!dateInput.value) {
-        dateField.setError("Укажите дату занятия.");
-        dateInput.focus();
+      if (!moveDateInput.value) {
+        moveDateField.setError("Укажите дату переноса.");
+        moveDateInput.focus();
         return;
       }
-      if (!timeInput.value) {
-        timeField.setError("Укажите время начала.");
-        timeInput.focus();
+      if (!moveTimeInput.value) {
+        moveTimeField.setError("Укажите время переноса.");
+        moveTimeInput.focus();
         return;
       }
-      if (dateInput.value === lesson.date && timeInput.value === lesson.startTime) {
-        dateField.setError("Это те же дата и время — измените дату или время, чтобы перенести.");
-        dateInput.focus();
+      if (moveDateInput.value === lesson.date && moveTimeInput.value === lesson.startTime) {
+        moveDateField.setError("Это те же дата и время — выберите другие, чтобы перенести.");
+        moveDateInput.focus();
         return;
       }
+
+      // Перенос идёт через общую форму: так же проверяются наложения,
+      // серия и заметка.
+      dateInput.value = moveDateInput.value;
+      timeInput.value = moveTimeInput.value;
       form.requestSubmit();
     });
 
@@ -883,6 +918,7 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
           text: `Сейчас: ${formatDate(lesson.date)}, ${lesson.startTime}`,
         }),
       ]),
+      el("div", { class: "form__row" }, [moveDateField, moveTimeField]),
       quickRow,
       el("div", { class: "move-box__actions" }, [moveButton, moveHint]),
     ]);
