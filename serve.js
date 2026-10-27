@@ -23,7 +23,16 @@ const MIME = {
 };
 
 function safePath(urlPath) {
-  const clean = decodeURIComponent(urlPath.split("?")[0].split("#")[0]);
+  // decodeURIComponent бросает URIError на некорректной последовательности
+  // вроде "/%E0%A4%A". Без этого перехвата ошибка всплывала из асинхронного
+  // обработчика и завершала процесс целиком.
+  let clean;
+  try {
+    clean = decodeURIComponent(urlPath.split("?")[0].split("#")[0]);
+  } catch {
+    return { badRequest: true };
+  }
+
   if (clean === "/" || clean === "") return { redirect: "/app/" };
   if (clean === "/app" || clean === "/app/") return { file: join(ROOT, "app", "index.html") };
 
@@ -33,7 +42,20 @@ function safePath(urlPath) {
 }
 
 const server = http.createServer(async (request, response) => {
-  const target = safePath(request.url || "/");
+  let target;
+  try {
+    target = safePath(request.url || "/");
+  } catch {
+    response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Некорректный адрес");
+    return;
+  }
+
+  if (target.badRequest) {
+    response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Некорректный адрес");
+    return;
+  }
 
   if (target.redirect) {
     response.writeHead(302, { Location: target.redirect });
