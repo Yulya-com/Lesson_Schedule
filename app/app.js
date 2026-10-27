@@ -242,19 +242,36 @@ function renderScheduleView() {
     "Вид расписания"
   );
 
+  // Подписи зависят от вида: в неделе листаем недели, в месяце — месяцы.
+  const periodWord = state.mode === "week" ? "неделя" : "месяц";
+
+  const prevButton = el("button", {
+    class: "btn btn--ghost btn--sm datenav__arrow",
+    type: "button",
+    "aria-label": state.mode === "week" ? "Предыдущая неделя" : "Предыдущий месяц",
+    onclick: () => shiftPeriod(-1),
+  }, [
+    el("span", { class: "datenav__chevron", text: "‹", "aria-hidden": "true" }),
+    el("span", { class: "datenav__label", text: `Пред. ${periodWord}` }),
+  ]);
+
+  const nextButton = el("button", {
+    class: "btn btn--ghost btn--sm datenav__arrow",
+    type: "button",
+    "aria-label": state.mode === "week" ? "Следующая неделя" : "Следующий месяц",
+    onclick: () => shiftPeriod(1),
+  }, [
+    el("span", { class: "datenav__label", text: `След. ${periodWord}` }),
+    el("span", { class: "datenav__chevron", text: "›", "aria-hidden": "true" }),
+  ]);
+
   const nav = el("div", { class: "datenav" }, [
-    el("button", {
-      class: "icon-btn", type: "button", "aria-label": "Предыдущий период", text: "‹",
-      onclick: () => shiftPeriod(-1),
-    }),
+    prevButton,
     el("button", {
       class: "btn btn--ghost btn--sm", type: "button", text: "Сегодня",
       onclick: goToday,
     }),
-    el("button", {
-      class: "icon-btn", type: "button", "aria-label": "Следующий период", text: "›",
-      onclick: () => shiftPeriod(1),
-    }),
+    nextButton,
   ]);
 
   page.append(el("header", { class: "page__head" }, [
