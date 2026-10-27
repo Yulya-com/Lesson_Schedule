@@ -802,32 +802,17 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
       ])
     : null;
 
-  /* Перенос занятия */
+  /* Перенос занятия.
+     Поля даты и времени здесь те же, что и в блоке «Дата и время»:
+     второй набор полей только запутывал, и «Сохранить» не переносил занятие. */
   let moveSection = null;
-  let moveDateField = null;
-  let moveTimeField = null;
-  let moveButton = null;
 
   if (!isNew) {
-    const moveDateInput = input({
-      type: "date",
-      name: "moveDate",
-      value: lesson.date,
-    });
-    moveDateField = field({ label: "Новая дата", control: moveDateInput });
-
-    const moveTimeInput = input({
-      type: "time",
-      step: "900",
-      name: "moveTime",
-      value: lesson.startTime,
-    });
-    moveTimeField = field({ label: "Новое время", control: moveTimeInput });
-
     const quickShift = (days) => {
-      const base = moveDateInput.value || lesson.date;
-      moveDateInput.value = addDays(base, days);
-      moveDateField?.setError("");
+      const base = dateInput.value || lesson.date;
+      dateInput.value = addDays(base, days);
+      dateField.setError("");
+      dateInput.dispatchEvent(new Event("input", { bubbles: true }));
     };
 
     const quickRow = el("div", { class: "move-box__quick" }, [
@@ -839,80 +824,70 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
         type: "button",
         text: "Сегодня",
         onclick: () => {
-          moveDateInput.value = todayISO();
-          moveDateField?.setError("");
+          dateInput.value = todayISO();
+          dateField.setError("");
+          dateInput.dispatchEvent(new Event("input", { bubbles: true }));
         },
       }),
     ]);
 
-    moveButton = el("button", { class: "btn btn--primary", type: "button", text: "Перенести" });
+    const moveButton = el("button", {
+      class: "btn btn--primary",
+      type: "button",
+      text: "Перенести",
+    });
 
-    moveButton.addEventListener("click", async () => {
-      moveDateField.setError("");
-      moveTimeField.setError("");
+    const moveHint = el("span", { class: "move-box__note" });
 
-      if (!moveDateInput.value) {
-        moveDateField.setError("Укажите дату переноса.");
-        moveDateInput.focus();
+    const updateMoveHint = () => {
+      const changed = dateInput.value !== lesson.date || timeInput.value !== lesson.startTime;
+      moveHint.textContent = changed
+        ? `Занятие переедет на ${formatDate(dateInput.value)}, ${timeInput.value}`
+        : "Измените дату или время выше — тогда занятие переедет";
+    };
+
+    ["input", "change"].forEach((eventName) => {
+      dateInput.addEventListener(eventName, updateMoveHint);
+      timeInput.addEventListener(eventName, updateMoveHint);
+    });
+
+    // Кнопка «Перенести» делает то же, что «Сохранить»: применяет дату и время
+    // из полей выше. Один путь — одно поведение.
+    moveButton.addEventListener("click", () => {
+      dateField.setError("");
+      timeField.setError("");
+
+      if (!dateInput.value) {
+        dateField.setError("Укажите дату занятия.");
+        dateInput.focus();
         return;
       }
-      if (!moveTimeInput.value) {
-        moveTimeField.setError("Укажите время переноса.");
-        moveTimeInput.focus();
+      if (!timeInput.value) {
+        timeField.setError("Укажите время начала.");
+        timeInput.focus();
         return;
       }
-
-      moveButton.disabled = true;
-      try {
-        const result = await performMove(
-          lesson,
-          { date: moveDateInput.value, time: moveTimeInput.value },
-          { silent: true }
-        );
-
-        if (!result.ok) {
-          if (result.reason === "same-student") {
-            moveTimeField.setError(
-              `У ученика уже есть занятие в ${result.other.startTime}. Выберите другое время.`
-            );
-            moveTimeInput.focus();
-          } else if (result.reason === "unchanged") {
-            moveDateField.setError("Это те же дата и время — переносить некуда.");
-          }
-          return;
-        }
-
-        // Заметку, если её правили в этой же карточке, тоже сохраняем.
-        if (noteInput.value.trim() || note) {
-          await db.saveNoteForLesson(state.db, {
-            lessonId: lesson.id,
-            studentId: lesson.studentId,
-            text: noteInput.value,
-          });
-        }
-
-        modal.close();
-        notifyMove(result.info);
-      } catch (error) {
-        console.error(error);
-        moveDateField.setError("Не удалось перенести занятие.");
-      } finally {
-        moveButton.disabled = false;
+      if (dateInput.value === lesson.date && timeInput.value === lesson.startTime) {
+        dateField.setError("Это те же дата и время — измените дату или время, чтобы перенести.");
+        dateInput.focus();
+        return;
       }
+      form.requestSubmit();
     });
 
     moveSection = el("section", { class: "move-box" }, [
       el("div", { class: "move-box__head" }, [
         el("strong", { text: "Перенести занятие" }),
-        el("span", { class: "move-box__hint", text: `Сейчас: ${formatDate(lesson.date)}, ${lesson.startTime}` }),
+        el("span", {
+          class: "move-box__hint",
+          text: `Сейчас: ${formatDate(lesson.date)}, ${lesson.startTime}`,
+        }),
       ]),
-      el("div", { class: "form__row" }, [moveDateField, moveTimeField]),
       quickRow,
-      el("div", { class: "move-box__actions" }, [
-        moveButton,
-        el("span", { class: "move-box__note", text: "Занятие встанет в расписание на новую дату" }),
-      ]),
+      el("div", { class: "move-box__actions" }, [moveButton, moveHint]),
     ]);
+
+    updateMoveHint();
   }
 
   /* Сборка формы */
@@ -948,7 +923,7 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
     deleteButton.addEventListener("click", async () => {
       const ok = await confirmDialog({
         title: "Удалить занятие?",
-        message: `Занятие ${formatDate(lesson.date)} в ${lesson.startTime} будет удалено. Действие можно отменить сразу после удаления.`,
+        message: `Занятие ${formatDate(lesson.date)} в ${lesson.startTime} будет удалено. Вернуть его можно будет сразу после удаления.`,
         confirmLabel: "Удалить",
         danger: true,
       });
@@ -1210,6 +1185,10 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
         }
       }
 
+      const beforeSchedule = isNew
+        ? null
+        : { date: lesson.date, startTime: lesson.startTime, duration: lesson.duration };
+
       const saved = await db.saveLesson(state.db, payload);
 
       if (noteInput.value.trim() || note) {
@@ -1220,14 +1199,63 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
         });
       }
 
+      const movedInCard = beforeSchedule && (
+        beforeSchedule.date !== saved.date
+        || beforeSchedule.startTime !== saved.startTime
+        || beforeSchedule.duration !== saved.duration
+      );
+
       await db.addActivity(state.db, {
-        type: isNew ? "create" : "update",
+        type: isNew ? "create" : movedInCard ? "move" : "update",
         message: `${isNew ? "Создано" : "Изменено"} занятие ${formatDate(saved.date)} ${saved.startTime}`,
       });
 
       modal.close();
+
+      // Если дата или время изменились, расписание должно показать новое место.
+      if (movedInCard && state.view === "schedule") {
+        const firstDay = state.settings.view.firstDay || 1;
+        if (state.mode === "week") {
+          if (!weekDays(state.anchor, firstDay).includes(saved.date)) state.anchor = saved.date;
+        } else if (saved.date.slice(0, 7) !== state.anchor.slice(0, 7)) {
+          state.anchor = saved.date;
+        }
+      }
+
       await refresh();
-      toast(isNew ? "Занятие создано" : "Изменения сохранены", { type: "success" });
+
+      if (movedInCard) {
+        const movedTime = beforeSchedule.date === saved.date
+          && beforeSchedule.startTime === saved.startTime
+          && beforeSchedule.duration !== saved.duration;
+        toast(
+          movedTime
+            ? `Длительность: ${durationLabel(saved.duration)}`
+            : `Перенесено на ${formatDate(saved.date)}, ${saved.startTime}`,
+          {
+            type: "success",
+            actionLabel: "Вернуть на прежнее место",
+            timeout: 8000,
+            onAction: async () => {
+              await db.saveLesson(state.db, {
+                ...saved,
+                date: beforeSchedule.date,
+                startTime: beforeSchedule.startTime,
+                duration: beforeSchedule.duration,
+              });
+              if (lesson.seriesId) {
+                const exceptions = (state.series.find((item) => item.id === lesson.seriesId)?.exceptions || [])
+                  .filter((date) => date !== (lesson.occurrenceDate || lesson.date));
+                await db.setSeriesExceptions(state.db, lesson.seriesId, exceptions);
+              }
+              await refresh();
+              toast("Занятие вернулось на прежнее место", { type: "info" });
+            },
+          }
+        );
+      } else {
+        toast(isNew ? "Занятие создано" : "Изменения сохранены", { type: "success" });
+      }
     } catch (error) {
       if (error instanceof db.ValidationError && error.field === "studentId") {
         studentField.setError(error.message);
@@ -1267,7 +1295,7 @@ async function performMove(lesson, target, { silent = false } = {}) {
 
   if (sameStudent.length) {
     if (!silent) {
-      toast(`У ученика уже есть занятие в это время (${sameStudent[0].startTime}). Перенос отменён.`, { type: "error" });
+      toast(`У ученика уже есть занятие в это время (${sameStudent[0].startTime}). Перенос не выполнен.`, { type: "error" });
     }
     return { ok: false, reason: "same-student", other: sameStudent[0] };
   }
@@ -1334,7 +1362,7 @@ async function performMove(lesson, target, { silent = false } = {}) {
   return { ok: true, info };
 }
 
-/** Уведомление о переносе с возможностью отменить. */
+/** Уведомление о переносе с возможностью вернуть занятие на прежнее место. */
 function notifyMove(info) {
   const { lesson, updated, before, exceptionsBefore, nextDate, nextTime, nextDuration } = info;
 
@@ -1344,7 +1372,7 @@ function notifyMove(info) {
 
   toast(whatChanged, {
     type: "success",
-    actionLabel: "Отменить",
+    actionLabel: "Вернуть на прежнее место",
     timeout: 8000,
     onAction: async () => {
       await db.saveLesson(state.db, { ...updated, ...before });
@@ -1352,7 +1380,7 @@ function notifyMove(info) {
         await db.setSeriesExceptions(state.db, lesson.seriesId, exceptionsBefore);
       }
       await refresh();
-      toast("Перенос отменён", { type: "info" });
+      toast("Занятие вернулось на прежнее место", { type: "info" });
     },
   });
 }
@@ -1380,7 +1408,7 @@ async function removeLesson(lesson) {
 
   toast(`Занятие ${formatDate(lesson.date)} удалено`, {
     type: "success",
-    actionLabel: "Отменить",
+    actionLabel: "Вернуть занятие",
     timeout: 8000,
     onAction: async () => {
       await db.saveLesson(state.db, lesson);
@@ -1388,7 +1416,7 @@ async function removeLesson(lesson) {
         await db.setSeriesExceptions(state.db, lesson.seriesId, exceptionsBefore);
       }
       await refresh();
-      toast("Удаление отменено", { type: "info" });
+      toast("Занятие восстановлено", { type: "info" });
     },
   });
 }
