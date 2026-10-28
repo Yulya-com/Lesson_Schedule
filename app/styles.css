@@ -891,12 +891,26 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .card__title { font-size: 17px; font-weight: 700; }
 .card__sub { font-size: 13px; color: var(--ink-faint); margin-top: -8px; }
 .card__text { font-size: 13.5px; color: var(--ink-soft); }
+.card__text--warning {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
 .card__actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
 .facts div { display: flex; flex-direction: column; }
 .facts dt { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-faint); }
 .facts dd { font-size: 18px; font-weight: 700; }
+
+/* Служебные сведения: имя файла и дата — обычным размером, а не заголовком */
+.facts--text dd {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
 
 /* ---------- Поля формы ---------- */
 

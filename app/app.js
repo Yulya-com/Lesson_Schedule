@@ -2,6 +2,7 @@
 // Данные читаются и пишутся через db.js, календарь рисует calendar.js.
 
 import * as db from "./db.js";
+import * as backup from "./backup.js";
 import {
   el, clear, field, input, select, checkbox, toast,
   openModal, confirmDialog, emptyState, badge, segmented,
@@ -63,6 +64,16 @@ const state = {
   showArchived: false,
   noteQuery: "",
   summaryMonth: todayISO(),
+  // Автоматическая копия в выбранную папку (см. backup.js).
+  autoBackup: {
+    supported: backup.isSupported(),
+    handle: null,
+    permission: "none", // "none" | "granted" | "prompt" | "denied"
+    lastAt: null,
+    fileName: null,
+    error: null,
+    saving: false,
+  },
 };
 
 const NAV_ITEMS = [
@@ -94,6 +105,9 @@ async function boot() {
 
   bindShortcuts();
   render();
+
+  // Автокопия не должна задерживать показ расписания.
+  initAutoBackup();
 }
 
 async function reload() {
@@ -112,6 +126,7 @@ async function reload() {
 async function refresh() {
   await reload();
   render();
+  scheduleAutoBackup();
 }
 
 function renderFatal(error) {
@@ -2225,6 +2240,8 @@ function renderSettingsView() {
   const clearButton = el("button", { class: "btn btn--ghost btn--danger-text", type: "button", text: "Очистить всё" });
   clearButton.addEventListener("click", clearEverything);
 
+  page.append(autoBackupCard());
+
   page.append(el("section", { class: "card" }, [
     el("h2", { class: "card__title", text: "Данные" }),
     el("p", { class: "card__sub", text: "Всё хранится локально в этом браузере" }),
@@ -2249,6 +2266,271 @@ function renderSettingsView() {
   ]));
 
   return page;
+}
+
+/* ---------- Автоматическая копия ---------- */
+
+/** Задержка перед записью: серия быстрых правок даёт одну копию. */
+const AUTO_BACKUP_DELAY = 3000;
+
+let autoBackupTimer = null;
+/** Подпись последней записанной копии: если данные не менялись, файл не трогаем. */
+let autoBackupSignature = null;
+
+/** Подпись содержимого без служебных полей вроде exportedAt. */
+function backupSignature(data) {
+  return JSON.stringify({
+    students: data.students,
+    lessons: data.lessons,
+    series: data.series,
+    notes: data.notes,
+    settings: data.settings,
+  });
+}
+
+function formatSavedAt(iso) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()}, `
+    + `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** Подхватывает ранее выбранную папку и, если доступ ещё действует, включает копирование. */
+async function initAutoBackup() {
+  const auto = state.autoBackup;
+  if (!auto.supported) return;
+
+  try {
+    const handle = await backup.loadFolder();
+    if (!handle) return;
+
+    auto.handle = handle;
+    auto.permission = await backup.queryPermission(handle);
+
+    const last = await backup.getLastSave();
+    if (last) {
+      auto.lastAt = last.at;
+      auto.fileName = last.fileName;
+    }
+
+    if (auto.permission === "granted") scheduleAutoBackup(1200);
+  } catch (error) {
+    logError("autoBackup:init", error);
+  }
+}
+
+/** Ставит запись в очередь. Ничего не делает, если папка не выбрана или нет доступа. */
+function scheduleAutoBackup(delay = AUTO_BACKUP_DELAY) {
+  const auto = state.autoBackup;
+  if (!auto.supported || !auto.handle || auto.permission !== "granted") return;
+
+  clearTimeout(autoBackupTimer);
+  autoBackupTimer = setTimeout(() => { runAutoBackup(); }, delay);
+}
+
+/** Записывает копию, если содержимое изменилось с прошлой записи. */
+async function runAutoBackup() {
+  const auto = state.autoBackup;
+  if (!auto.handle || auto.permission !== "granted" || auto.saving) return;
+
+  auto.saving = true;
+  try {
+    const data = await db.exportData(state.db);
+    const signature = backupSignature(data);
+    if (signature === autoBackupSignature) return;
+
+    const info = await backup.writeBackup(auto.handle, data, todayISO());
+    autoBackupSignature = signature;
+    auto.lastAt = info.at;
+    auto.fileName = info.fileName;
+    auto.error = null;
+  } catch (error) {
+    auto.error = error?.message || "Не удалось записать копию";
+    logError("autoBackup:write", error);
+  } finally {
+    auto.saving = false;
+  }
+
+  // Экран настроек показывает состояние копии: обновляем его без полной перерисовки.
+  // Пока пользователь что-то вводит в поле, перерисовку не делаем — иначе слетит ввод.
+  if (state.view === "settings" && !isEditingField()) render();
+}
+
+/** Открыто ли поле ввода: во время набора перерисовывать экран нельзя. */
+function isEditingField() {
+  const active = document.activeElement;
+  if (!active) return false;
+  return ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName);
+}
+
+async function chooseAutoBackupFolder() {
+  try {
+    const handle = await backup.chooseFolder();
+    state.autoBackup.handle = handle;
+    state.autoBackup.permission = "granted";
+    state.autoBackup.error = null;
+    autoBackupSignature = null;
+
+    await runAutoBackup();
+    toast("Автоматическая копия включена: файл обновляется сам", { type: "success", timeout: 6000 });
+  } catch (error) {
+    if (error?.name === "AbortError") return; // пользователь закрыл окно выбора
+    logError("autoBackup:choose", error);
+    toast(error?.message || "Не удалось выбрать папку", { type: "error", timeout: 8000 });
+  }
+  render();
+}
+
+async function resumeAutoBackup() {
+  const auto = state.autoBackup;
+  if (!auto.handle) return;
+
+  const permission = await backup.requestPermission(auto.handle);
+  auto.permission = permission;
+
+  if (permission === "granted") {
+    autoBackupSignature = null;
+    await runAutoBackup();
+    toast("Доступ к папке восстановлен", { type: "success" });
+  } else {
+    toast("Доступ к папке не выдан — копия не создаётся", { type: "error", timeout: 8000 });
+  }
+  render();
+}
+
+async function saveBackupNow() {
+  autoBackupSignature = null;
+  await runAutoBackup();
+
+  if (state.autoBackup.error) {
+    toast(state.autoBackup.error, { type: "error", timeout: 8000 });
+  } else {
+    toast(`Копия записана: ${state.autoBackup.fileName}`, { type: "success" });
+  }
+  render();
+}
+
+async function disableAutoBackup() {
+  const ok = await confirmDialog({
+    title: "Выключить автоматическую копию?",
+    message: "Приложение перестанет обновлять файл копии. Уже записанные файлы останутся в папке.",
+    confirmLabel: "Выключить",
+    danger: true,
+  });
+  if (!ok) return;
+
+  clearTimeout(autoBackupTimer);
+  await backup.forgetFolder();
+
+  state.autoBackup.handle = null;
+  state.autoBackup.permission = "none";
+  state.autoBackup.lastAt = null;
+  state.autoBackup.fileName = null;
+  state.autoBackup.error = null;
+  autoBackupSignature = null;
+
+  toast("Автоматическая копия выключена", { type: "info" });
+  render();
+}
+
+/** Карточка настроек: состояние копии и кнопки управления. */
+function autoBackupCard() {
+  const auto = state.autoBackup;
+  const card = el("section", { class: "card" });
+  card.append(
+    el("h2", { class: "card__title", text: "Автоматическая копия" }),
+    el("p", {
+      class: "card__sub",
+      text: "Файл копии обновляется сам при каждом изменении данных",
+    })
+  );
+
+  if (!auto.supported) {
+    card.append(el("p", {
+      class: "card__text",
+      text: "Этот браузер не умеет писать в папку без вашего участия. "
+        + "Делайте копию кнопкой «Экспорт JSON» — данные сохранятся в «Загрузки».",
+    }));
+    return card;
+  }
+
+  if (!auto.handle) {
+    const chooseButton = el("button", {
+      class: "btn btn--primary",
+      type: "button",
+      text: "Выбрать папку для копий",
+    });
+    chooseButton.addEventListener("click", chooseAutoBackupFolder);
+
+    card.append(
+      el("p", {
+        class: "card__text",
+        text: "Выберите папку один раз — например, D:\\TutorFlow-копии. "
+          + "Приложение будет записывать туда файл при каждом изменении, "
+          + "даже если вы потом очистите данные браузера.",
+      }),
+      el("div", { class: "card__actions" }, [chooseButton])
+    );
+    return card;
+  }
+
+  const status = el("dl", { class: "facts facts--text" }, [
+    el("div", {}, [el("dt", { text: "Папка" }), el("dd", { text: "выбрана" })]),
+    el("div", {}, [
+      el("dt", { text: "Файл" }),
+      el("dd", { text: auto.fileName || "ещё не создан" }),
+    ]),
+    el("div", {}, [
+      el("dt", { text: "Последняя запись" }),
+      el("dd", { text: auto.lastAt ? formatSavedAt(auto.lastAt) : "ещё не было" }),
+    ]),
+  ]);
+  card.append(status);
+
+  if (auto.permission === "prompt") {
+    const resumeButton = el("button", { class: "btn btn--primary", type: "button", text: "Возобновить доступ" });
+    resumeButton.addEventListener("click", resumeAutoBackup);
+    card.append(
+      el("p", {
+        class: "card__text card__text--warning",
+        text: "Браузер просит подтвердить доступ к папке после перезапуска. "
+          + "Пока доступ не подтверждён, копия не создаётся.",
+      }),
+      el("div", { class: "card__actions" }, [resumeButton])
+    );
+  }
+
+  if (auto.permission === "denied") {
+    card.append(el("p", {
+      class: "card__text card__text--warning",
+      text: "Доступ к папке запрещён. Выберите папку заново, чтобы копия снова создавалась.",
+    }));
+  }
+
+  if (auto.error) {
+    card.append(el("p", {
+      class: "card__text card__text--warning",
+      text: `Не удалось записать копию: ${auto.error}`,
+    }));
+  }
+
+  const nowButton = el("button", { class: "btn btn--ghost", type: "button", text: "Сохранить сейчас" });
+  nowButton.addEventListener("click", saveBackupNow);
+
+  const changeButton = el("button", { class: "btn btn--ghost", type: "button", text: "Выбрать другую папку" });
+  changeButton.addEventListener("click", chooseAutoBackupFolder);
+
+  const offButton = el("button", {
+    class: "btn btn--ghost btn--danger-text",
+    type: "button",
+    text: "Выключить",
+  });
+  offButton.addEventListener("click", disableAutoBackup);
+
+  card.append(el("div", { class: "card__actions" }, [nowButton, changeButton, offButton]));
+  return card;
 }
 
 /* ---------- Данные ---------- */
