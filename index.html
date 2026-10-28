@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="TutorFlow — локальный планировщик занятий репетитора">
+  <title>TutorFlow — планировщик занятий репетитора</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#view">Перейти к содержимому</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true">TF</span>
+      <span class="brand__text">
+        <strong>TutorFlow</strong>
+        <small>Планировщик занятий репетитора</small>
+      </span>
+    </div>
+
+    <nav class="nav" id="nav" aria-label="Разделы приложения"></nav>
+
+    <div class="topbar__actions">
+      <button class="btn btn--primary" id="btn-new-lesson" type="button">Новое занятие</button>
+    </div>
+  </header>
+
+  <main id="view" class="view" tabindex="-1"></main>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <div id="modal-root"></div>
+
+  <noscript>
+    <p class="noscript">
+      Для работы TutorFlow нужен JavaScript. Включите его и перезагрузите страницу.
+    </p>
+  </noscript>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
