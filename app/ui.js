@@ -3,7 +3,9 @@
 
 /**
  * Создаёт элемент.
- * props: class, text, html, style, dataset, aria-*, on<Event>, остальные — атрибуты.
+ * props: class, text, style, dataset, aria-*, on<Event>, остальные — атрибуты.
+ * Разметку через innerHTML хелпер не принимает: любой пользовательский текст
+ * (имя ученика, заметка) должен попадать в DOM только как текст.
  */
 export function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
@@ -15,10 +17,17 @@ export function el(tag, props = {}, children = []) {
       node.className = value;
     } else if (key === "text") {
       node.textContent = String(value);
-    } else if (key === "html") {
-      node.innerHTML = value;
     } else if (key === "style") {
-      node.setAttribute("style", value);
+      // CSP запрещает атрибут style целиком, но присваивание через CSSOM
+      // (node.style.setProperty) разрешено. Строку "top: 10px; height: 40px"
+      // разбираем на отдельные свойства.
+      String(value).split(";").forEach((rule) => {
+        const separator = rule.indexOf(":");
+        if (separator === -1) return;
+        const property = rule.slice(0, separator).trim();
+        const setting = rule.slice(separator + 1).trim();
+        if (property && setting) node.style.setProperty(property, setting);
+      });
     } else if (key === "dataset") {
       Object.assign(node.dataset, value);
     } else if (key.startsWith("on") && typeof value === "function") {

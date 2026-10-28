@@ -88,19 +88,26 @@ app/index.html             каркас страницы
 app/styles.css             оформление
 app/db.js                  IndexedDB: схема, миграции, операции
 app/db.test.js             тесты моделей ученика и занятия
+app/db.integrity.test.js   тесты целостности, лимитов и резервной копии
 app/recurrence.js          даты и правила повтора
 app/recurrence.test.js     тесты правил повтора
 app/calendar.js            сетки недели и месяца, drag & drop
 app/ui.js                  модальные окна, уведомления, поля формы
 app/app.js                 состояние, экраны, сценарии
+serve.test.js              тесты сервера: доступ, обходы путей, заголовки
+package.json               скрипты запуска и тестов, без зависимостей
 ```
 
 ## Проверки
 
 ```powershell
-Get-ChildItem app\*.js, serve.js | ForEach-Object { node --check $_.FullName }
-node --test app/db.test.js app/recurrence.test.js
+node --check app\app.js; Get-ChildItem app\*.js, serve.js | ForEach-Object { node --check $_.FullName }
+npm test          # или: node --test
 ```
+
+`npm test` запускает 70 тестов: модели и правила повтора, целостность данных,
+резервную копию и сервер целиком (доступность `app/`, закрытость остальных
+файлов, обходы путей, заголовки безопасности, ответ на битый URL).
 
 ## Данные и приватность
 

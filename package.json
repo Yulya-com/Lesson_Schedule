@@ -1,0 +1,14 @@
+{
+  "name": "tutorflow",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Планировщик занятий репетитора: статическое приложение без зависимостей",
+  "type": "module",
+  "scripts": {
+    "start": "node serve.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

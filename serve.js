@@ -27,6 +27,30 @@ const MIME = {
   ".md": "text/markdown; charset=utf-8",
 };
 
+/**
+ * Заголовки безопасности для всех ответов.
+ * CSP разрешает только файлы этого же сервера: внешние скрипты и запросы
+ * наружу заблокированы. nosniff запрещает браузеру угадывать тип файла,
+ * frame-ancestors и X-Frame-Options запрещают встраивание в чужой iframe.
+ */
+const SECURITY_HEADERS = {
+  "Content-Security-Policy":
+    "default-src 'self'; "
+    + "script-src 'self'; "
+    + "style-src 'self'; "
+    + "img-src 'self' data: blob:; "
+    + "font-src 'self'; "
+    + "connect-src 'self'; "
+    + "object-src 'none'; "
+    + "base-uri 'none'; "
+    + "form-action 'none'; "
+    + "frame-ancestors 'none'",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Permissions-Policy": "geolocation=(), camera=(), microphone=()",
+};
+
 function safePath(urlPath) {
   // decodeURIComponent бросает URIError на некорректной последовательности
   // вроде "/%E0%A4%A". Без этого перехвата ошибка всплывала из асинхронного
@@ -66,19 +90,19 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (target.badRequest) {
-    response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+    response.writeHead(400, { ...SECURITY_HEADERS, "Content-Type": "text/plain; charset=utf-8" });
     response.end("Некорректный адрес");
     return;
   }
 
   if (target.redirect) {
-    response.writeHead(302, { Location: target.redirect });
+    response.writeHead(302, { ...SECURITY_HEADERS, Location: target.redirect });
     response.end();
     return;
   }
 
   if (target.forbidden) {
-    response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+    response.writeHead(403, { ...SECURITY_HEADERS, "Content-Type": "text/plain; charset=utf-8" });
     response.end("Доступ запрещён");
     return;
   }
@@ -89,6 +113,7 @@ const server = http.createServer(async (request, response) => {
     const body = await readFile(filePath);
     const type = MIME[extname(filePath).toLowerCase()] || "application/octet-stream";
     response.writeHead(200, {
+      ...SECURITY_HEADERS,
       "Content-Type": type,
       // Файлы приложения меняются во время разработки: браузер не должен
       // отдавать старую версию из кэша.
@@ -98,11 +123,10 @@ const server = http.createServer(async (request, response) => {
     });
     response.end(body);
   } catch {
-    response.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
+    response.writeHead(404, { ...SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8" });
     response.end(
       `<!doctype html><meta charset="utf-8"><title>404</title>
-       <p style="font:16px system-ui;padding:24px">Файл не найден.
-       Откройте <a href="/app/">главную страницу</a>.</p>`
+       <p>Файл не найден. Откройте <a href="/app/">главную страницу</a>.</p>`
     );
   }
 });

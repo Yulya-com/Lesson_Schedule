@@ -14,6 +14,38 @@ import {
   timeRangeLabel, buildOccurrences, describeRule, plural,
 } from "./recurrence.js";
 
+/* ---------- Логирование ---------- */
+
+/**
+ * Ошибки пишем в консоль только при ?debug=1.
+ * Ожидаемые ошибки проверки данных не логируем: это не сбой, а подсказка
+ * пользователю, и в консоли они создают лишний шум.
+ */
+function logError(context, error) {
+  if (error instanceof db.ValidationError) return false;
+
+  const debug = new URLSearchParams(window.location.search).get("debug") === "1";
+  if (debug) console.error(`[${context}]`, error);
+  return true;
+}
+
+/* ---------- Начальный вид ---------- */
+
+/** Ширина, ниже которой недельная сетка требует горизонтальной прокрутки. */
+const NARROW_SCREEN = 768;
+
+/**
+ * На узком экране неделя шириной 820 px не помещается, поэтому по умолчанию
+ * открываем «Список». Явный выбор пользователя всегда важнее.
+ */
+function pickInitialMode(savedMode) {
+  if (savedMode === "month" || savedMode === "list" || savedMode === "week") {
+    if (savedMode === "week" && window.innerWidth < NARROW_SCREEN) return "list";
+    return savedMode;
+  }
+  return window.innerWidth < NARROW_SCREEN ? "list" : "week";
+}
+
 /* ---------- Состояние ---------- */
 
 const state = {
@@ -49,7 +81,7 @@ async function boot() {
   try {
     state.db = await db.openDatabase();
     state.settings = await db.getSettings(state.db);
-    state.mode = state.settings.view.mode === "month" ? "month" : "week";
+    state.mode = pickInitialMode(state.settings.view.mode);
     await reload();
   } catch (error) {
     renderFatal(error);
@@ -406,7 +438,7 @@ function openDueList(period) {
           await db.saveLesson(state.db, { ...lesson, paid: true });
           await db.addActivity(state.db, {
             type: "payment",
-            message: `Отмечена оплата: ${student?.name || "ученик"} ${formatDate(lesson.date)}`,
+            message: `Отмечена оплата занятия ${formatDate(lesson.date)} ${lesson.startTime}`,
           });
           modal.close();
           await refresh();
@@ -635,6 +667,7 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
     list: subjectListId,
     placeholder: "Например, Математика",
     value: initial.subject || "",
+    maxlength: db.LIMITS.subject,
   });
   const subjectDatalist = el("datalist", { id: subjectListId });
   const subjectOptions = [...new Set([
@@ -716,11 +749,16 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
     class: "input input--area",
     name: "note",
     rows: "4",
+    maxlength: db.LIMITS.noteText,
     placeholder: "Что прошли, что задать, на что обратить внимание",
   });
   noteInput.value = note?.text || "";
 
-  const noteField = field({ label: "Заметка к занятию", control: noteInput });
+  const noteField = field({
+    label: "Заметка к занятию",
+    control: noteInput,
+    hint: `До ${db.LIMITS.noteText} символов`,
+  });
 
   /* Повтор для нового занятия */
   const repeatToggle = el("input", { type: "checkbox", id: `repeat-${formId}` });
@@ -1320,7 +1358,7 @@ function openLessonModal({ lesson = null, date = null, time = null } = {}) {
         (map[error.field] || studentField).setError(error.message);
         return;
       }
-      console.error(error);
+      logError("lesson:save", error);
       toast(error?.message || "Не удалось сохранить занятие", { type: "error" });
     }
   });
@@ -1660,12 +1698,14 @@ function openStudentModal(student = null) {
   const firstNameInput = input({
     type: "text", name: "firstName", value: initial.firstName || "",
     required: true, placeholder: "Анна", autocomplete: "off",
+    maxlength: db.LIMITS.firstName,
   });
   const firstNameField = field({ label: "Имя", control: firstNameInput, required: true });
 
   const lastNameInput = input({
     type: "text", name: "lastName", value: initial.lastName || "",
     required: true, placeholder: "Ковалёва", autocomplete: "off",
+    maxlength: db.LIMITS.lastName,
   });
   const lastNameField = field({
     label: "Фамилия",
@@ -1675,14 +1715,22 @@ function openStudentModal(student = null) {
   });
 
   const subjectListId = `student-subjects-${formId}`;
-  const subjectInput = input({ type: "text", name: "subject", value: initial.subject, list: subjectListId, placeholder: "Например, Математика", required: true });
+  const subjectInput = input({
+    type: "text", name: "subject", value: initial.subject, list: subjectListId,
+    placeholder: "Например, Математика", required: true,
+    maxlength: db.LIMITS.subject,
+  });
   const subjectDatalist = el("datalist", { id: subjectListId });
   [...new Set([...db.DEMO_SUBJECTS, ...state.students.map((item) => item.subject).filter(Boolean)])]
     .sort((a, b) => a.localeCompare(b, "ru"))
     .forEach((value) => subjectDatalist.append(el("option", { value })));
   const subjectField = field({ label: "Предмет", control: subjectInput, required: true });
 
-  const contactInput = input({ type: "text", name: "contact", value: initial.contact, placeholder: "+7…, @ник или email" });
+  const contactInput = input({
+    type: "text", name: "contact", value: initial.contact,
+    placeholder: "+7…, @ник или email",
+    maxlength: db.LIMITS.contact,
+  });
   const contactField = field({
     label: "Контакт",
     control: contactInput,
@@ -1715,7 +1763,13 @@ function openStudentModal(student = null) {
   colorRow.append(...colorButtons);
   const colorField = field({ label: "Цвет в расписании", control: colorRow });
 
-  const commentInput = el("textarea", { class: "input input--area", name: "comment", rows: "3", placeholder: "Цель занятий, особенности, договорённости" });
+  const commentInput = el("textarea", {
+    class: "input input--area",
+    name: "comment",
+    rows: "3",
+    maxlength: db.LIMITS.comment,
+    placeholder: "Цель занятий, особенности, договорённости",
+  });
   commentInput.value = initial.comment || "";
   const commentField = field({ label: "Комментарий", control: commentInput });
 
@@ -1740,7 +1794,7 @@ function openStudentModal(student = null) {
       await db.setStudentArchived(state.db, student.id, !student.archived);
       await db.addActivity(state.db, {
         type: "student",
-        message: `${student.archived ? "Возвращён из архива" : "Отправлен в архив"}: ${student.name}`,
+        message: student.archived ? "Ученик возвращён из архива" : "Ученик отправлен в архив",
       });
       modal.close();
       await refresh();
@@ -1814,7 +1868,7 @@ function openStudentModal(student = null) {
 
       await db.addActivity(state.db, {
         type: "student",
-        message: `${isNew ? "Добавлен" : "Изменён"} ученик: ${saved.name}`,
+        message: isNew ? "Добавлен ученик" : "Изменены данные ученика",
       });
 
       modal.close();
@@ -1834,7 +1888,7 @@ function openStudentModal(student = null) {
         target.querySelector("input")?.focus();
         return;
       }
-      console.error(error);
+      logError("student:save", error);
       toast(error?.message || "Не удалось сохранить ученика", { type: "error" });
     }
   });
@@ -1911,7 +1965,11 @@ function renderNotesView() {
 function noteCard(note, lesson) {
   const student = getStudent(lesson.studentId);
 
-  const textarea = el("textarea", { class: "note__text input input--area", rows: "4" });
+  const textarea = el("textarea", {
+    class: "note__text input input--area",
+    rows: "4",
+    maxlength: db.LIMITS.noteText,
+  });
   textarea.value = note.text;
 
   const status = el("span", { class: "note__status", "aria-live": "polite", text: "Сохранено" });
@@ -1931,7 +1989,7 @@ function noteCard(note, lesson) {
         if (saved) state.notes.push(saved);
         status.textContent = saved ? "Сохранено" : "Пустая заметка не сохраняется";
       } catch (error) {
-        console.error(error);
+        logError("note:save", error);
         status.textContent = "Не удалось сохранить";
       }
     }, 700);
@@ -2195,23 +2253,32 @@ function renderSettingsView() {
 
 /* ---------- Данные ---------- */
 
+/** Максимальный размер импортируемого файла: больше — вкладка зависнет. */
+const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Выгружает текущие данные в файл. Возвращает имя файла.
+ * Используется и кнопкой «Экспорт», и автоматической копией перед импортом.
+ */
+async function downloadBackup(prefix = "tutorflow") {
+  const data = await db.exportData(state.db);
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const name = `${prefix}-${todayISO()}.json`;
+  const link = el("a", { href: url, download: name, class: "visually-hidden" });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return name;
+}
+
 async function exportBackup() {
   try {
-    const data = await db.exportData(state.db);
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = el("a", {
-      href: url,
-      download: `tutorflow-${todayISO()}.json`,
-      class: "visually-hidden",
-    });
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    await downloadBackup();
     toast("Резервная копия сохранена", { type: "success" });
   } catch (error) {
-    console.error(error);
+    logError("exportBackup", error);
     toast("Не удалось создать файл копии", { type: "error" });
   }
 }
@@ -2221,6 +2288,13 @@ async function importBackup(event) {
   if (!file) return;
 
   try {
+    if (file.size > MAX_IMPORT_BYTES) {
+      throw new Error(
+        `Файл слишком большой: ${Math.round(file.size / 1048576)} МБ. `
+        + `Допустимо не больше ${Math.round(MAX_IMPORT_BYTES / 1048576)} МБ.`
+      );
+    }
+
     const text = await file.text();
     let data;
     try {
@@ -2234,18 +2308,61 @@ async function importBackup(event) {
     const ok = await confirmDialog({
       title: "Заменить все данные?",
       message: `В файле учеников: ${counts.students.length}, занятий: ${counts.lessons.length}, заметок: ${counts.notes.length}. `
-        + "Текущие данные будут полностью заменены. Отменить это действие нельзя.",
+        + "Текущие данные будут полностью заменены. "
+        + "Перед заменой приложение сохранит резервную копию текущих данных в папку загрузок.",
       confirmLabel: "Заменить",
       danger: true,
     });
     if (!ok) return;
 
+    // Страховка: сначала сохраняем то, что есть сейчас. Если импорт провалится,
+    // прежние данные можно вернуть из этого файла.
+    let safetyName = null;
+    try {
+      safetyName = await downloadBackup("tutorflow-before-import");
+    } catch (error) {
+      logError("importBackup:backup", error);
+      const proceed = await confirmDialog({
+        title: "Не удалось сохранить копию",
+        message: "Резервная копия текущих данных не создана. Продолжить импорт без страховки?",
+        confirmLabel: "Продолжить",
+        danger: true,
+      });
+      if (!proceed) return;
+    }
+
     const result = await db.importData(state.db, normalized);
     await refresh();
-    toast(`Импортировано: учеников ${result.students}, занятий ${result.lessons}, заметок ${result.notes}`, { type: "success" });
+
+    const saved = safetyName ? ` Прежние данные сохранены в файл ${safetyName}.` : "";
+    toast(
+      `Импортировано: учеников ${result.students}, занятий ${result.lessons}, `
+      + `серий ${result.series}, заметок ${result.notes}.${saved}`,
+      { type: "success", timeout: 12000 }
+    );
   } catch (error) {
-    console.error(error);
-    toast(error?.message || "Не удалось прочитать файл", { type: "error" });
+    logError("importBackup", error);
+
+    // Ошибки записей показываем списком: пользователю нужно знать,
+    // что именно исправить в файле.
+    if (Array.isArray(error?.problems) && error.problems.length) {
+      openModal({
+        title: "Импорт отменён",
+        size: "md",
+        body: [
+          el("p", { class: "modal__text", text: "Данные не изменены. В файле есть записи с ошибками:" }),
+          el("ul", { class: "problem-list" },
+            error.problems.slice(0, 30).map((item) => el("li", { text: item }))
+          ),
+          error.problems.length > 30
+            ? el("p", { class: "field__hint", text: `…и ещё ${error.problems.length - 30}.` })
+            : null,
+        ],
+      });
+      return;
+    }
+
+    toast(error?.message || "Не удалось прочитать файл", { type: "error", timeout: 12000 });
   } finally {
     event.target.value = "";
   }
@@ -2274,7 +2391,7 @@ async function loadDemo() {
     await refresh();
     toast(`Пример загружен: учеников ${result.students}, занятий ${result.lessons}`, { type: "success" });
   } catch (error) {
-    console.error(error);
+    logError("demo:load", error);
     toast("Не удалось загрузить пример", { type: "error" });
   }
 }
@@ -2285,7 +2402,7 @@ async function removeDemo() {
   try {
     found = await db.findDemoRecords(state.db);
   } catch (error) {
-    console.error(error);
+    logError("demo:find", error);
     toast("Не удалось проверить демо-данные", { type: "error" });
     return;
   }
@@ -2313,7 +2430,7 @@ async function removeDemo() {
       { type: "success" }
     );
   } catch (error) {
-    console.error(error);
+    logError("demo:remove", error);
     toast("Не удалось удалить демо-данные", { type: "error" });
   }
 }
@@ -2333,7 +2450,7 @@ async function clearEverything() {
     await refresh();
     toast("Все данные удалены", { type: "info" });
   } catch (error) {
-    console.error(error);
+    logError("clearAll", error);
     toast("Не удалось очистить данные", { type: "error" });
   }
 }

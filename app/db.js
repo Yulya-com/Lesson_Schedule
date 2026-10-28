@@ -41,6 +41,20 @@ export const SUBJECT_COLORS = [
   "indigo", "mint", "amber", "coral", "sky", "violet", "teal", "rose",
 ];
 
+/**
+ * Ограничения длины текстовых полей.
+ * Без них в заметку можно вставить мегабайты текста: запись сохранится,
+ * а рендер списка заметок и экспорт копии подвесят вкладку.
+ */
+export const LIMITS = {
+  firstName: 40,
+  lastName: 40,
+  subject: 60,
+  contact: 80,
+  comment: 2000,
+  noteText: 5000,
+};
+
 export const DEFAULT_SETTINGS = {
   workHours: {
     start: "08:00",
@@ -223,23 +237,91 @@ function normalizeDuration(value) {
 
 /* ---------- Настройки ---------- */
 
-export async function getSettings(db) {
-  const records = await getAll(db, STORE_SETTINGS);
-  const map = new Map(records.map((record) => [record.key, record.value]));
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const STEP_VALUES = [15, 30, 60];
+const DURATION_VALUES = [15, 30, 45, 60, 75, 90, 120, 150, 180, 240];
+
+/** Приводит рабочие часы к допустимым значениям, мусор заменяет значениями по умолчанию. */
+export function sanitizeWorkHours(input = {}) {
+  const base = DEFAULT_SETTINGS.workHours;
+  const raw = input && typeof input === "object" ? input : {};
+
+  const start = TIME_RE.test(String(raw.start || "")) ? String(raw.start) : base.start;
+  let end = TIME_RE.test(String(raw.end || "")) ? String(raw.end) : base.end;
+  if (end <= start) end = base.end;
+
+  const step = STEP_VALUES.includes(Number(raw.step)) ? Number(raw.step) : base.step;
+
+  const workdays = Array.isArray(raw.workdays)
+    ? [...new Set(
+        raw.workdays
+          .map(Number)
+          .filter((day) => Number.isInteger(day) && day >= 1 && day <= 7)
+      )].sort((a, b) => a - b)
+    : [...base.workdays];
 
   return {
-    workHours: { ...DEFAULT_SETTINGS.workHours, ...(map.get("workHours") || {}) },
-    defaults: { ...DEFAULT_SETTINGS.defaults, ...(map.get("defaults") || {}) },
-    view: { ...DEFAULT_SETTINGS.view, ...(map.get("view") || {}) },
+    start,
+    end,
+    step,
+    workdays: workdays.length ? workdays : [...base.workdays],
+    showWeekends: typeof raw.showWeekends === "boolean" ? raw.showWeekends : base.showWeekends,
   };
+}
+
+/** Приводит значения по умолчанию к допустимым. */
+export function sanitizeDefaults(input = {}) {
+  const base = DEFAULT_SETTINGS.defaults;
+  const raw = input && typeof input === "object" ? input : {};
+
+  const duration = DURATION_VALUES.includes(Number(raw.duration))
+    ? Number(raw.duration)
+    : base.duration;
+
+  const rate = Number(raw.rate);
+
+  return {
+    duration,
+    rate: Number.isFinite(rate) && rate >= 0 ? Math.round(rate) : base.rate,
+  };
+}
+
+/** Приводит настройки вида к допустимым. */
+export function sanitizeView(input = {}) {
+  const base = DEFAULT_SETTINGS.view;
+  const raw = input && typeof input === "object" ? input : {};
+
+  return {
+    firstDay: Number(raw.firstDay) === 7 ? 7 : base.firstDay,
+    mode: ["week", "month", "list"].includes(raw.mode) ? raw.mode : base.mode,
+  };
+}
+
+/** Собирает настройки из массива записей вида { key, value }, отбрасывая некорректные. */
+export function sanitizeSettingsRecords(records = []) {
+  const map = new Map();
+  for (const raw of records) {
+    if (raw && typeof raw.key === "string") map.set(raw.key, raw.value);
+  }
+
+  return {
+    workHours: sanitizeWorkHours(map.get("workHours")),
+    defaults: sanitizeDefaults(map.get("defaults")),
+    view: sanitizeView(map.get("view")),
+  };
+}
+
+export async function getSettings(db) {
+  const records = await getAll(db, STORE_SETTINGS);
+  return sanitizeSettingsRecords(records);
 }
 
 export async function saveSettings(db, patch = {}) {
   const current = await getSettings(db);
   const next = {
-    workHours: { ...current.workHours, ...(patch.workHours || {}) },
-    defaults: { ...current.defaults, ...(patch.defaults || {}) },
-    view: { ...current.view, ...(patch.view || {}) },
+    workHours: sanitizeWorkHours({ ...current.workHours, ...(patch.workHours || {}) }),
+    defaults: sanitizeDefaults({ ...current.defaults, ...(patch.defaults || {}) }),
+    view: sanitizeView({ ...current.view, ...(patch.view || {}) }),
   };
 
   const transaction = db.transaction(STORE_SETTINGS, "readwrite");
@@ -286,26 +368,37 @@ export function createStudent(input = {}) {
   if (firstName.length < 2) {
     throw new ValidationError("Имя — не короче 2 символов.", "firstName");
   }
-  if (firstName.length > 40) {
-    throw new ValidationError("Имя — не длиннее 40 символов.", "firstName");
+  if (firstName.length > LIMITS.firstName) {
+    throw new ValidationError(`Имя — не длиннее ${LIMITS.firstName} символов.`, "firstName");
   }
   if (lastName.length < 2) {
     throw new ValidationError("Фамилия — не короче 2 символов.", "lastName");
   }
-  if (lastName.length > 40) {
-    throw new ValidationError("Фамилия — не длиннее 40 символов.", "lastName");
+  if (lastName.length > LIMITS.lastName) {
+    throw new ValidationError(`Фамилия — не длиннее ${LIMITS.lastName} символов.`, "lastName");
   }
 
   const subject = String(input.subject || "").trim();
   if (!subject) throw new ValidationError("Укажите предмет занятий.", "subject");
+  if (subject.length > LIMITS.subject) {
+    throw new ValidationError(`Предмет — не длиннее ${LIMITS.subject} символов.`, "subject");
+  }
 
   const contact = String(input.contact || "").trim();
-  if (contact.length > 80) {
-    throw new ValidationError("Контакт — не длиннее 80 символов.", "contact");
+  if (contact.length > LIMITS.contact) {
+    throw new ValidationError(`Контакт — не длиннее ${LIMITS.contact} символов.`, "contact");
   }
   // Телефон может содержать пробелы и дефисы, ник и email — нет.
   if (contact && !/^[+\d(]/.test(contact) && /\s/.test(contact)) {
     throw new ValidationError("Ник или email пишутся без пробелов.", "contact");
+  }
+
+  const comment = String(input.comment || "").trim();
+  if (comment.length > LIMITS.comment) {
+    throw new ValidationError(
+      `Комментарий — не длиннее ${LIMITS.comment} символов.`,
+      "comment"
+    );
   }
 
   const rate = Number(input.rate);
@@ -323,7 +416,7 @@ export function createStudent(input = {}) {
     contact,
     rate: Math.round(rate),
     color: SUBJECT_COLORS.includes(input.color) ? input.color : SUBJECT_COLORS[0],
-    comment: String(input.comment || "").trim(),
+    comment,
     archived: Boolean(input.archived),
     demo: Boolean(input.demo),
     createdAt: input.createdAt || new Date().toISOString(),
@@ -439,7 +532,23 @@ export async function getLesson(db, id) {
 
 export async function saveLesson(db, input) {
   const lesson = createLesson(input);
-  const transaction = db.transaction(STORE_LESSONS, "readwrite");
+
+  // Ссылочная целостность: занятие не должно ссылаться на несуществующего
+  // ученика, иначе в расписании появляется «Ученик не найден», а суммы
+  // в сводке искажаются.
+  const transaction = db.transaction([STORE_LESSONS, STORE_STUDENTS], "readwrite");
+  const student = await requestToPromise(
+    transaction.objectStore(STORE_STUDENTS).get(lesson.studentId)
+  );
+
+  if (!student) {
+    transaction.abort();
+    throw new ValidationError(
+      "Ученик не найден. Выберите существующего ученика.",
+      "studentId"
+    );
+  }
+
   transaction.objectStore(STORE_LESSONS).put(lesson);
   await transactionToPromise(transaction);
   return lesson;
@@ -597,11 +706,19 @@ export function createNote(input = {}) {
   const lessonId = String(input.lessonId || "").trim();
   if (!lessonId) throw new ValidationError("Заметка должна быть привязана к занятию.", "lessonId");
 
+  const text = String(input.text || "").trim();
+  if (text.length > LIMITS.noteText) {
+    throw new ValidationError(
+      `Заметка — не длиннее ${LIMITS.noteText} символов. Сейчас ${text.length}.`,
+      "text"
+    );
+  }
+
   return {
     id: input.id || createId(),
     lessonId,
     studentId: String(input.studentId || ""),
-    text: String(input.text || "").trim(),
+    text,
     demo: Boolean(input.demo),
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -742,14 +859,27 @@ export function validateBackup(data) {
   if (data.app && data.app !== "TutorFlow") {
     throw new Error("Это копия другого приложения.");
   }
-  if (Number(data.schemaVersion) > DB_VERSION) {
+
+  // Number(undefined) даёт NaN, а NaN > DB_VERSION — это false, поэтому
+  // проверка «больше» пропускала копии вообще без номера версии.
+  const version = Number(data.schemaVersion);
+  if (!Number.isInteger(version) || version < 1) {
+    throw new Error("В файле не указана версия схемы — не удалось проверить копию.");
+  }
+  if (version > DB_VERSION) {
     throw new Error("Копия сделана в более новой версии приложения.");
   }
+
   if (!Array.isArray(data.students) || !Array.isArray(data.lessons)) {
     throw new Error("В файле нет списка учеников или занятий.");
   }
 
+  // app и schemaVersion возвращаются вместе с данными: результат этой функции
+  // передаётся в importData, который проверяет копию ещё раз. Без них
+  // повторная проверка не находила версию и отменяла любой импорт.
   return {
+    app: "TutorFlow",
+    schemaVersion: version,
     students: data.students,
     lessons: data.lessons,
     series: Array.isArray(data.series) ? data.series : [],
@@ -759,9 +889,78 @@ export function validateBackup(data) {
   };
 }
 
-/** Полная замена данных одной транзакцией. */
+/**
+ * Полная замена данных одной транзакцией.
+ *
+ * Сначала проверяются все записи файла. Если хоть одна некорректна, импорт
+ * отменяется целиком и база не меняется. Раньше ошибки проглатывались:
+ * старые данные уже были удалены, новые записывались частично.
+ */
 export async function importData(db, backup) {
   const data = validateBackup(backup);
+  const problems = [];
+
+  const students = [];
+  data.students.forEach((raw, index) => {
+    try {
+      students.push(createStudent(raw));
+    } catch (error) {
+      problems.push(`Ученик №${index + 1}: ${error.message}`);
+    }
+  });
+
+  const studentIds = new Set(students.map((item) => item.id));
+
+  const lessons = [];
+  data.lessons.forEach((raw, index) => {
+    try {
+      const lesson = createLesson(raw);
+      if (!studentIds.has(lesson.studentId)) {
+        problems.push(`Занятие №${index + 1}: ученик не найден в файле.`);
+        return;
+      }
+      lessons.push(lesson);
+    } catch (error) {
+      problems.push(`Занятие №${index + 1}: ${error.message}`);
+    }
+  });
+
+  const lessonIds = new Set(lessons.map((item) => item.id));
+
+  const series = [];
+  data.series.forEach((raw, index) => {
+    try {
+      series.push(createSeriesRecord(raw));
+    } catch (error) {
+      problems.push(`Серия №${index + 1}: ${error.message}`);
+    }
+  });
+
+  const notes = [];
+  data.notes.forEach((raw, index) => {
+    try {
+      const note = createNote(raw);
+      if (!lessonIds.has(note.lessonId)) {
+        problems.push(`Заметка №${index + 1}: занятие не найдено в файле.`);
+        return;
+      }
+      notes.push(note);
+    } catch (error) {
+      problems.push(`Заметка №${index + 1}: ${error.message}`);
+    }
+  });
+
+  if (problems.length) {
+    const shown = problems.slice(0, 10).join("\n");
+    const rest = problems.length > 10 ? `\n…и ещё ${problems.length - 10}.` : "";
+    const error = new Error(
+      `Импорт отменён: в файле ${problems.length} записей с ошибками. Данные не изменены.\n\n${shown}${rest}`
+    );
+    error.problems = problems;
+    throw error;
+  }
+
+  const settings = sanitizeSettingsRecords(data.settings);
   const stores = [
     STORE_STUDENTS, STORE_LESSONS, STORE_SERIES,
     STORE_NOTES, STORE_SETTINGS, STORE_ACTIVITY,
@@ -771,73 +970,40 @@ export async function importData(db, backup) {
   stores.forEach((name) => transaction.objectStore(name).clear());
 
   const studentsStore = transaction.objectStore(STORE_STUDENTS);
-  let students = 0;
-  for (const raw of data.students) {
-    try {
-      studentsStore.put(createStudent(raw));
-      students += 1;
-    } catch {
-      // повреждённая запись пропускается, остальное импортируется
-    }
-  }
-
-  const studentIds = new Set(
-    [...data.students].filter((item) => item && item.id).map((item) => item.id)
-  );
+  students.forEach((item) => studentsStore.put(item));
 
   const lessonsStore = transaction.objectStore(STORE_LESSONS);
-  let lessons = 0;
-  for (const raw of data.lessons) {
-    try {
-      const lesson = createLesson(raw);
-      if (!studentIds.has(lesson.studentId)) continue;
-      lessonsStore.put(lesson);
-      lessons += 1;
-    } catch {
-      // занятие без ученика или с битой датой не импортируется
-    }
-  }
+  lessons.forEach((item) => lessonsStore.put(item));
 
   const seriesStore = transaction.objectStore(STORE_SERIES);
-  let series = 0;
-  for (const raw of data.series) {
-    try {
-      seriesStore.put(createSeriesRecord(raw));
-      series += 1;
-    } catch {
-      // некорректное правило пропускается
-    }
-  }
+  series.forEach((item) => seriesStore.put(item));
 
   const notesStore = transaction.objectStore(STORE_NOTES);
-  let notes = 0;
-  for (const raw of data.notes) {
-    try {
-      notesStore.put(createNote(raw));
-      notes += 1;
-    } catch {
-      // заметка без занятия пропускается
-    }
-  }
+  notes.forEach((item) => notesStore.put(item));
 
   const settingsStore = transaction.objectStore(STORE_SETTINGS);
-  for (const raw of data.settings) {
-    if (raw && raw.key) settingsStore.put({ key: raw.key, value: raw.value });
-  }
+  settingsStore.put({ key: "workHours", value: settings.workHours });
+  settingsStore.put({ key: "defaults", value: settings.defaults });
+  settingsStore.put({ key: "view", value: settings.view });
 
   const activityStore = transaction.objectStore(STORE_ACTIVITY);
-  for (const raw of data.activity.slice(-ACTIVITY_LIMIT)) {
-    if (!raw || !raw.id) continue;
+  data.activity.slice(-ACTIVITY_LIMIT).forEach((raw) => {
+    if (!raw || !raw.id) return;
     activityStore.put({
       id: raw.id,
       type: raw.type || "info",
       message: String(raw.message || ""),
       at: raw.at || new Date().toISOString(),
     });
-  }
+  });
 
   await transactionToPromise(transaction);
-  return { students, lessons, series, notes };
+  return {
+    students: students.length,
+    lessons: lessons.length,
+    series: series.length,
+    notes: notes.length,
+  };
 }
 
 export async function clearAll(db) {
